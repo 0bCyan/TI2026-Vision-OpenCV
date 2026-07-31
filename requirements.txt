@@ -1,0 +1,6 @@
+numpy>=1.24
+# Windows/local prototype wheel. Orange Pi must use requirements-orange-pi.txt
+# and the system/GStreamer-enabled OpenCV instead.
+opencv-python>=4.9,<6
+PyYAML>=6.0
+pyserial>=3.5

@@ -1,0 +1,142 @@
+camera:
+  source: 1
+  backend: dshow
+  width: 1280
+  height: 720
+  fps: 180.0
+  fourcc: MJPG
+  buffer_size: 1
+  gstreamer_pipeline: ""
+  reconnect_seconds: 1.0
+  read_timeout_seconds: 0.05
+  # OpenCV只能取得解码完成时刻。完成LED实测后，可在此填写固定流水线延迟估计。
+  timestamp_offset_ms: 0.0
+  warmup_seconds: 0.5
+  strict_contract: false
+  min_measured_fps_ratio: 0.94
+  max_interval_p99_ms: 15.0
+  max_frame_gap_ms: 25.0
+  max_read_p95_ms: 10.0
+  max_read_failures: 0
+  # 下列数值依后端/驱动而异。接入目标相机后填写，程序会在每次打开/重连时重设并读回。
+  # DirectShow手动曝光常见auto_exposure=0.25，exposure常为负档位；不要照抄示例值。
+  controls:
+    # ZSKJ / DHZJ Camera，Windows DirectShow 实测值。
+    # -8 约在 180 fps 帧周期以内；最终补光后仍需复测运动模糊。
+    exposure: -8.0
+  strict_control_readback: false
+  # 若由v4l2-ctl/厂商工具在启动脚本中设置并读回，可显式改为true。
+  controls_verified_externally: false
+  control_tolerance: 0.5
+  file_realtime: true
+  fingerprint_frames: false
+
+# 首次接入摄像头后必须运行 tools/select_roi.py。ROI应覆盖完整水管和两端挡片，
+# 上下仅保留约1.5个球直径的余量；当前值只是安全的全画面占位配置。
+roi:
+  x: 50
+  y: 220
+  width: 980
+  height: 260
+
+detector:
+  threshold:
+    polarity: dark
+    median_blur_size: 5
+    min_contrast_delta: 18.0
+    std_gain: 0.8
+    threshold_min: 25
+    threshold_max: 180
+    background_enabled: true
+    background_path: data/background.png
+    background_diff_threshold: 18
+    background_brightness_align: true
+    # 背景存在时要求目标既是暗球候选、又相对空管发生变化，避免固定圆形管件误锁。
+    combine_mode: and
+    morph_open_size: 3
+    morph_close_size: 5
+  # 下列像素参数必须用真实720p画面重新确认。若水管在画面中约1000px长，
+  # 直径1cm钢球通常约40px，半径初值约20px。
+  radius_min_px: 10.0
+  radius_max_px: 26.0
+  expected_radius_px: 16.0
+  # 搜索时允许装配/透视误差，跟踪后收紧，防止把圆形紧固件或大反光斑锁成球。
+  radius_tolerance_search_ratio: 0.40
+  radius_tolerance_track_ratio: 0.30
+  area_min_px: 220.0
+  area_max_px: 2500.0
+  circularity_min: 0.40
+  fill_ratio_min: 0.42
+  aspect_ratio_min: 0.55
+  aspect_ratio_max: 1.75
+  channel_center_y_px: 130.0
+  max_center_y_error_px: 125.0
+  border_margin_px: 2
+  max_prediction_distance_px: 150.0
+  ransac_iterations: 40
+  ransac_residual_px: 2.2
+  fit_rms_max_px: 4.0
+  fit_min_inlier_ratio: 0.45
+  contour_sample_limit: 240
+  edge_refine_enabled: true
+  edge_annulus_ratio: 0.35
+  edge_min_gradient: 18.0
+  edge_radial_alignment_min: 0.45
+  edge_center_shift_max_ratio: 0.35
+  edge_ransac_iterations: 24
+  edge_ransac_residual_px: 1.6
+  arc_coverage_min: 0.30
+  search_confidence_min: 0.65
+  track_confidence_min: 0.45
+  ambiguity_score_gap: 8.0
+  ambiguity_confidence_scale: 0.55
+  return_debug_mask: true
+
+# 当前两点只是占位映射。正式使用必须运行 tools/calibrate_position.py，
+# 以5或10mm间隔点击题目允许的刻度，建立单调分段线性标定。
+calibration:
+  mode: piecewise_linear
+  degree: 1
+  points:
+    - [0.0, -125.0]
+    - [1279.0, 125.0]
+
+tracker:
+  process_accel_sigma_mm_s2: 2500.0
+  measurement_sigma_mm: 0.7
+  initial_position_sigma_mm: 3.0
+  initial_velocity_sigma_mm_s: 250.0
+  gate_sigma: 5.0
+  gate_min_mm: 8.0
+  confirmation_frames: 2
+  max_prediction_ms: 25.0
+  lost_reset_ms: 80.0
+  min_dt_seconds: 0.001
+  max_dt_seconds: 0.05
+  velocity_limit_mm_s: 1800.0
+
+output:
+  serial_enabled: false
+  serial_port: COM3
+  serial_baudrate: 921600
+  udp_enabled: false
+  udp_host: 127.0.0.1
+  udp_port: 25060
+
+display:
+  enabled: true
+  max_fps: 30.0
+  scale: 0.65
+  show_mask: true
+  draw_candidates: true
+
+logging:
+  enabled: true
+  directory: logs
+  flush_interval_seconds: 1.0
+
+# 单线程OpenCV在Windows实测比默认线程池的P95/P99抖动更小；香橙派上需要重新基准。
+runtime:
+  opencv_threads: 1
+  opencl_enabled: false
+  disable_python_gc: true

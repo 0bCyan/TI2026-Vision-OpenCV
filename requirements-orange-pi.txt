@@ -1,0 +1,4 @@
+# OpenCV and NumPy must come from the board image/system packages so cv2 keeps
+# V4L2/GStreamer support. Do not add opencv-python to this file.
+PyYAML>=6.0
+pyserial>=3.5

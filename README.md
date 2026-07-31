@@ -1,0 +1,252 @@
+# TI 2026 H题滚球视觉（OpenCV重构版）
+
+这是一套面向“摄像头随摆杆刚性运动、相机与水管相对固定”的低延迟视觉测量工程。它不直接控制电机，只向实时控制器输出钢球位置、速度、测量方差、状态、帧号和数据新鲜度。
+
+当前版本优先完成纯 OpenCV 主链，并为后续异步 YOLO-Seg/RKNN 粗分割保留接口。神经网络即使加入，也只提供候选Mask，最终位置仍由原始分辨率边缘圆拟合给出。
+
+## 当前验证状态
+
+- Python语法检查通过。
+- 22项自动测试通过：圆拟合、反光、JPEG压缩、固定暗干扰、错误半径、离散短弧、标定、乱序时间戳、失联重捕、采集合约和协议CRC。
+- 本机合成ROI重复基准（1280×140，3×300帧）：0漏检，圆心误差RMS约0.55 px、P95约0.59 px；最近一次无并发汇总P50约2.26 ms、P95约3.88 ms、P99约6.63 ms，各轮P95约3.62～4.18 ms。尾延迟会受Windows调度影响，应以目标机多轮结果为准。
+- 上述只是算法基准，不包含USB采集和MJPEG解码。
+- 当前未连接目标720p/180fps外置UVC摄像头，因此尚未验证真实180fps、重复帧、曝光和端到端延迟。不能把标称帧率当成实测结果。
+
+## 数据流
+
+```text
+UVC MJPEG采集线程（只保留最新帧）
+    ↓
+固定水管ROI
+    ↓
+空管背景差分 + 稳健暗目标阈值
+    ↓
+连通域几何硬门限
+    ↓
+轮廓RANSAC圆拟合
+    ↓
+原始灰度径向边缘二次精修
+    ↓
+单调分段线性 像素→毫米 标定
+    ↓
+毫米域可变dt Kalman [位置, 速度]
+    ↓
+MEASURED / PREDICTED / LOST / REACQUIRED
+    ↓
+CRC16串口或UDP遥测 + CSV日志
+```
+
+采集、检测、显示和遥测已解耦。采集线程不使用普通FIFO队列，消费者永远获取最新一帧，避免180fps下处理旧画面。
+
+正式控制器必须设置独立通信看门狗：约20～30 ms没有收到CRC正确、序号更新的新包就进入视觉失联安全策略。部分OpenCV原生后端无法保证`read()`可被Python超时中断，因此不能只等待视觉程序主动发送`LOST`。
+
+## Windows安装
+
+建议正式统一使用Python 3.10、3.11或3.12；本工程当前也已在Python 3.13上通过测试。
+这里的`requirements.txt`包含Windows本机原型所需的PyPI OpenCV；香橙派不要安装它，板端使用独立的`requirements-orange-pi.txt`和带V4L2/GStreamer的系统OpenCV。
+
+```powershell
+cd "D:\BaiduNetdiskDownload\26电赛复刻 H车载平衡滚球运动控制系统\03.完赛代码\K230代码\vision_opencv"
+py -3.12 -m venv .venv
+.\.venv\Scripts\python.exe -m pip install -r requirements-dev.txt
+.\.venv\Scripts\python.exe -m pytest -q
+```
+
+本次工作区已经在上一级目录创建测试环境，也可以直接运行：
+
+```powershell
+..\.venv\Scripts\python.exe -m pytest -q
+```
+
+## 第一次接入摄像头的强制流程
+
+### 1. 验证真实摄像头合同
+
+分别实测DirectShow与MSMF，不能相信`CAP_PROP_FPS`的报告值：
+
+```powershell
+.\.venv\Scripts\python.exe tools\probe_camera.py --source 1 --backend dshow --seconds 5 --strict
+.\.venv\Scripts\python.exe tools\probe_camera.py --source 1 --backend msmf --seconds 5 --strict
+```
+
+把示例中的摄像头索引`1`替换为目标相机的实际索引；后续所有步骤统一使用实测更好的后端。
+
+正式运行建议至少达到：
+
+- 协商格式确为`MJPG 1280×720@180`；
+- 实测接收率不低于约170 fps；
+- 无20～25 ms以上的频繁停顿；
+- 曝光固定在1～3 ms；
+- 关闭自动曝光、自动增益、自动白平衡、自动对焦。
+
+目标摄像头没有接入时，探测失败属于正常现象。
+
+目标相机接入后，把驱动实际采用的控制值写入`camera.controls`。这些值在首次打开和每次重连时都会重新设置、读回并显示；确认后再把`strict_control_readback`设为`true`。DirectShow/MSMF/V4L2对曝光值的单位和手动模式编码不同，必须以目标设备实测为准，不能照抄其他相机参数。
+
+```yaml
+camera:
+  controls:
+    auto_exposure: 目标驱动的手动模式值
+    exposure: 目标驱动对应1至3ms的值
+    gain: 实测低噪声值
+    auto_wb: 0
+    autofocus: 0
+  strict_control_readback: true
+```
+
+若香橙派启动脚本使用`v4l2-ctl`设置并读回全部控制项，可不重复走OpenCV属性，但要在确认脚本确实成功后设置`camera.controls_verified_externally: true`，并用systemd等监护进程负责重新设置后再启动。该模式发生UVC断流时程序会退出，不会在未重设曝光的情况下自行恢复。正式串口/UDP输出会拒绝“控制项既未程序读回、也未外部验真”的配置。
+
+### 2. 选择固定ROI
+
+ROI要覆盖整个水管、两端挡片以及球心的完整有效行程，上下只留约1.3～1.6个球直径余量：
+
+```powershell
+.\.venv\Scripts\python.exe tools\select_roi.py --source 1 --backend dshow
+```
+
+### 3. 显式采集空管背景
+
+移走钢球，保留正式刻度、挡片、补光和机械位置：
+
+```powershell
+.\.venv\Scripts\python.exe tools\capture_background.py --source 1 --backend dshow --frames 96
+```
+
+背景是多帧中位数，不会在正常运行中EMA更新，因此钢球长期静止也不会被背景模型“吃掉”。
+
+虽然相机与水管相对固定，摆杆转动后钢球和透明管壁相对赛场灯光的反射仍会变化。国赛装配应在相机旁增加随杆转动的恒流漫射补光与遮光罩，并在最大正/负摆角录制压力数据；背景算法不能代替稳定光学环境。
+
+### 4. 毫米位置标定
+
+按照提示依次点击已知刻度。默认从-120 mm到+120 mm，每10 mm一点：
+
+```powershell
+.\.venv\Scripts\python.exe tools\calibrate_position.py --source 1 --backend dshow
+```
+
+正式标定建议5～10 mm间隔。随后必须用错开的5 mm位置独立验证，不能只检查标定点。映射采用单调分段线性插值，避免高阶多项式端部发散。
+
+### 5. 调整球像素尺寸
+
+运行主程序，观察调试画面中的拟合圆半径，并修改[default.yaml](config/default.yaml)中的：
+
+```yaml
+radius_min_px: 真实半径的约0.65倍
+radius_max_px: 真实半径的约1.35倍
+expected_radius_px: 正常半径
+area_min_px: 对应最小面积
+area_max_px: 对应最大面积
+```
+
+不要直接复制K230的固定16～52 px参数。
+
+### 6. 启动
+
+`--strict`会拒绝全画面占位ROI、缺失的空管背景、少于5点的毫米标定，以及不满足帧率/帧间隔/读取耗时合同的摄像头。
+
+```powershell
+.\.venv\Scripts\python.exe run_vision.py --source 1 --backend dshow --strict
+```
+
+按`Q`或`Esc`退出。无显示运行：
+
+```powershell
+.\.venv\Scripts\python.exe run_vision.py --source 1 --backend dshow --strict --headless
+```
+
+处理录像：
+
+```powershell
+.\.venv\Scripts\python.exe run_vision.py --source data\test.mkv
+```
+
+## 合成测试和性能基准
+
+```powershell
+.\.venv\Scripts\python.exe -m pytest -q
+.\.venv\Scripts\python.exe tools\benchmark_synthetic.py --frames 300
+```
+
+基准会加入钢球高光、噪声和不同JPEG质量。它用于算法回归，不替代真实摄像头、真实管壁反射和端部遮挡数据。
+
+## 输出状态
+
+- `VALID`：当前输出由本帧有效测量更新；
+- `PREDICTED`：本帧没测到球，只提供短时预测，绝不能当作有效测量；
+- `LOST`：连续丢失，控制器必须进入安全策略；
+- `REACQUIRED`：刚完成时空一致确认并重捕；
+- `NEAR_EDGE`：球接近标定有效区端部。
+
+视觉输出包括：
+
+```text
+position_mm
+velocity_mm_s
+position_sigma_mm
+confidence
+flags
+frame_sequence
+frame_time_us（单机单调时钟，32位回绕）
+frame_age_us
+processing_us
+CRC16
+```
+
+OpenCV摄像头到达时间只是“解码完成到达应用”的时刻，不是真实曝光时刻。`camera.timestamp_offset_ms`只能补偿实测固定延迟。最终应使用视野内LED和逻辑分析仪测量光子到控制输出的P50/P95/P99。
+
+协议定义见[PROTOCOL.md](PROTOCOL.md)。
+
+## 纯OpenCV验收线与YOLO准入
+
+建议正式视觉目标：
+
+| 指标 | 目标 |
+|---|---:|
+| 静态全行程RMS | ≤0.5 mm |
+| 动态位置P95 | ≤1.0 mm |
+| 动态最大误差 | ≤2.0 mm |
+| 正常场景真实检测率 | ≥99.95% |
+| 正常连续漏检 | ≤1帧 |
+| 压力场景连续漏检 | ≤3帧 |
+| 无球/固定干扰错误锁定 | 10万帧为0 |
+| 唯一帧输入率 | ≥175 Hz |
+| 有效测量输出 | ≥160 Hz |
+| ROI检测P95 | ≤5 ms |
+| 曝光到输出P95 | ≤10～12 ms |
+| 曝光到输出P99 | ≤15 ms |
+| 连续运行 | ≥60 min无队列增长或内存泄漏 |
+
+只有真实holdout录像表明失败主要集中在强反光、遮挡或相似物歧义，并且补光、曝光、背景与几何约束仍无法解决时，才增加YOLO-Seg。网络必须异步运行，只返回粗Mask；原图圆拟合、毫米标定和Kalman保持不变。接口位于`ball_vision/fallback.py`。
+
+以下问题不能靠YOLO修复：USB缓存、重复帧、运动模糊、标定漂移、支架振动、错误时间戳和控制器延迟。
+
+## 香橙派5 Ultra迁移
+
+算法层、配置、协议和测试不变，只替换采集后端。详细步骤见[ORANGE_PI.md](ORANGE_PI.md)。
+
+## 目录
+
+```text
+ball_vision/
+  capture.py       最新帧采集与采集统计
+  detector.py      OpenCV候选、圆拟合和边缘精修
+  circle_fit.py    向量化RANSAC圆拟合
+  calibration.py   单调像素—毫米映射
+  tracker.py       毫米域Kalman与状态机
+  pipeline.py      无UI/串口耦合的纯处理流水线
+  protocol.py      二进制协议与CRC16
+  output.py        串口/UDP发布
+  telemetry_log.py CSV完整日志
+  fallback.py      后续分割网络粗Mask接口
+tools/
+  probe_camera.py
+  select_roi.py
+  capture_background.py
+  calibrate_position.py
+  benchmark_synthetic.py
+tests/
+```
+
+## 机械提醒
+
+摄像头随摆杆运动会增加转动惯量，USB线也会形成随角度变化的干扰力矩。摄像头和支架应尽量靠近铰链，使用柔软线材和松弛弯曲段，并在最终装配状态重新标定和重新整定摆杆控制器。

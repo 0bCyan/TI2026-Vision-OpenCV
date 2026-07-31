@@ -1,0 +1,8 @@
+__pycache__/
+.pytest_cache/
+logs/*.csv
+logs/*.avi
+data/background.png
+data/*.mkv
+data/*.avi
+

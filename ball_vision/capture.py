@@ -322,10 +322,6 @@ class LatestFrameCapture:
                     self._last_fingerprint = fingerprint
                 self._duplicate_window.append(1 if duplicate else 0)
                 self._received += 1
-            if duplicate:
-                # A frozen backend must not keep advancing FRAME_ID and link
-                # freshness. Do not publish an identical frame as new data.
-                continue
             self._sequence = (self._sequence + 1) & 0xFFFFFFFF
             offset_ns = int(self.config.timestamp_offset_ms * 1e6)
             frame_time_ns = source_frame_time_ns or (arrival_ns - offset_ns)

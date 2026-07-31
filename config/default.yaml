@@ -30,7 +30,9 @@ camera:
   controls_verified_externally: false
   control_tolerance: 0.5
   file_realtime: true
-  fingerprint_frames: true
+  # 像素指纹仅作诊断，静止场景的相同图像不等于UVC重复帧。
+  # tools/probe_camera.py会临时开启；正式唯一帧号应来自V4L2 sequence/PTS。
+  fingerprint_frames: false
   max_duplicate_ratio: 0.001
 
 # 首次接入摄像头后必须运行 tools/select_roi.py。ROI应覆盖完整水管和两端挡片，

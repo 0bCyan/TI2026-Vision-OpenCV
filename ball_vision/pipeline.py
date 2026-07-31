@@ -48,6 +48,8 @@ class VisionPipeline:
         background_path = config.resolve_path(config.detector.threshold.background_path)
         self.detector = BallDetector(config.detector, background_path)
         self.tracker = BallTracker(config.tracker)
+        self._force_global_search = False
+        self._last_detection_roi_y: float | None = None
 
     def _local_mm_per_pixel(self, pixel_x: float) -> float:
         minimum_px, maximum_px = self.mapper.pixel_limits
@@ -163,11 +165,24 @@ class VisionPipeline:
 
         prediction = self.tracker.predict(packet.frame_time_ns)
         predicted_roi_x: float | None = None
-        if prediction is not None and self.tracker.prediction_is_fresh(packet.frame_time_ns):
+        predicted_roi_y: float | None = None
+        prediction_is_fresh = (
+            prediction is not None
+            and self.tracker.prediction_is_fresh(packet.frame_time_ns)
+        )
+        if prediction_is_fresh and not self._force_global_search:
+            assert prediction is not None
             predicted_global_x = self.mapper.mm_to_pixel(prediction[0])
             predicted_roi_x = predicted_global_x - x
+            predicted_roi_y = self._last_detection_roi_y
 
-        detection = self.detector.detect(roi, predicted_roi_x)
+        detection = self.detector.detect(
+            roi,
+            predicted_roi_x,
+            predicted_roi_y,
+        )
+        if detection.valid and detection.candidate is not None:
+            self._last_detection_roi_y = float(detection.candidate.center_px[1])
         raw_measurement = self._make_raw_measurement(
             detection,
             roi_x=x,
@@ -191,6 +206,13 @@ class VisionPipeline:
             tracker_confidence,
             packet.frame_time_ns,
         )
+        if prediction_is_fresh:
+            # One predictive-window miss is enough to restore the full ROI on
+            # subsequent frames. Keep global search until the tracker actually
+            # associates a measurement, not merely until any contour appears.
+            self._force_global_search = estimate.measurement_mm is None
+        else:
+            self._force_global_search = False
         minimum_mm, maximum_mm = self.mapper.millimeter_limits
         if estimate.valid and (
             estimate.position_mm <= minimum_mm + self.config.measurement.near_edge_margin_mm

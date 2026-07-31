@@ -35,6 +35,7 @@ class BallDetector:
         self._background_raw: np.ndarray | None = None
         self._background_median: float | None = None
         self.last_candidates: tuple[CircleCandidate, ...] = ()
+        self.last_search_rect: tuple[int, int, int, int] | None = None
         if background_path and background_path.exists():
             background = imread_path(background_path, cv2.IMREAD_GRAYSCALE)
             if background is not None:
@@ -75,7 +76,11 @@ class BallDetector:
             return cv2.cvtColor(image, cv2.COLOR_BGRA2GRAY)
         raise ValueError(f"不支持的图像形状: {image.shape}")
 
-    def _build_masks(self, gray: np.ndarray) -> tuple[np.ndarray, np.ndarray, float]:
+    def _build_masks(
+        self,
+        gray: np.ndarray,
+        background_override: np.ndarray | None = None,
+    ) -> tuple[np.ndarray, np.ndarray, float]:
         threshold_config = self.config.threshold
         filtered = self._preprocess(gray)
         median = self._fast_median(filtered)
@@ -90,18 +95,22 @@ class BallDetector:
             intensity_mask = cv2.inRange(filtered, round(threshold), 255)
 
         background_mask = np.zeros_like(intensity_mask)
+        background = (
+            self.background if background_override is None else background_override
+        )
         background_available = (
             threshold_config.background_enabled
-            and self.background is not None
-            and self.background.shape == gray.shape
+            and background is not None
+            and background.shape == gray.shape
         )
         if background_available:
-            background = self.background
+            assert background is not None
             aligned = filtered
             if threshold_config.background_brightness_align:
                 background_median = (
                     self._background_median
-                    if self._background_median is not None
+                    if background_override is None
+                    and self._background_median is not None
                     else self._fast_median(background)
                 )
                 shift = background_median - median
@@ -137,7 +146,12 @@ class BallDetector:
             combined = cv2.morphologyEx(combined, cv2.MORPH_CLOSE, kernel)
         return combined, background_mask, threshold
 
-    def _refine_from_edges(self, gray: np.ndarray, initial_fit):
+    def _refine_from_edges(
+        self,
+        gray: np.ndarray,
+        initial_fit,
+        iterations: int,
+    ):
         """Refine the threshold contour on original-intensity radial edges."""
         if not self.config.edge_refine_enabled:
             return initial_fit
@@ -184,7 +198,7 @@ class BallDetector:
             edge_points,
             radius_min=self.config.radius_min_px,
             radius_max=self.config.radius_max_px,
-            iterations=self.config.edge_ransac_iterations,
+            iterations=iterations,
             residual_threshold=self.config.edge_ransac_residual_px,
             sample_limit=self.config.contour_sample_limit,
         )
@@ -204,21 +218,125 @@ class BallDetector:
         self,
         roi_image: np.ndarray,
         predicted_center_px: float | None = None,
+        predicted_center_y_px: float | None = None,
     ) -> DetectionResult:
-        gray = self._to_gray(roi_image)
-        mask, background_mask, threshold = self._build_masks(gray)
+        full_gray = self._to_gray(roi_image)
+        full_height, full_width = full_gray.shape
+        if predicted_center_px is not None and not np.isfinite(predicted_center_px):
+            predicted_center_px = None
+        if predicted_center_y_px is not None and not np.isfinite(
+            predicted_center_y_px
+        ):
+            predicted_center_y_px = None
+        search_x0 = 0
+        search_x1 = full_width
+        search_y0 = 0
+        search_y1 = full_height
+        morphology_margin = max(
+            self.config.threshold.morph_open_size,
+            self.config.threshold.morph_close_size,
+        )
+        if predicted_center_px is not None and self.config.predictive_search_enabled:
+            padding = int(
+                np.ceil(
+                    self.config.max_prediction_distance_px
+                    + self.config.radius_max_px
+                    + self.config.border_margin_px
+                    + morphology_margin
+                )
+            )
+            proposed_x0 = max(0, int(np.floor(predicted_center_px)) - padding)
+            proposed_x1 = min(
+                full_width,
+                int(np.ceil(predicted_center_px)) + padding + 1,
+            )
+            minimum_width = int(
+                np.ceil(2.0 * self.config.radius_max_px)
+                + 2 * self.config.border_margin_px
+                + 1
+            )
+            if proposed_x1 - proposed_x0 >= minimum_width:
+                search_x0, search_x1 = proposed_x0, proposed_x1
+        if (
+            predicted_center_px is not None
+            and predicted_center_y_px is not None
+            and self.config.predictive_search_enabled
+        ):
+            y_padding = int(
+                np.ceil(
+                    max(
+                        self.config.predictive_search_y_half_height_px,
+                        self.config.radius_max_px
+                        + self.config.border_margin_px
+                        + morphology_margin,
+                    )
+                )
+            )
+            proposed_y0 = max(0, int(np.floor(predicted_center_y_px)) - y_padding)
+            proposed_y1 = min(
+                full_height,
+                int(np.ceil(predicted_center_y_px)) + y_padding + 1,
+            )
+            minimum_height = int(
+                np.ceil(2.0 * self.config.radius_max_px)
+                + 2 * self.config.border_margin_px
+                + 1
+            )
+            if proposed_y1 - proposed_y0 >= minimum_height:
+                search_y0, search_y1 = proposed_y0, proposed_y1
+
+        gray = full_gray[search_y0:search_y1, search_x0:search_x1]
+        background_override: np.ndarray | None = None
+        if (
+            self.background is not None
+            and self.background.shape == full_gray.shape
+            and (
+                search_x0 != 0
+                or search_x1 != full_width
+                or search_y0 != 0
+                or search_y1 != full_height
+            )
+        ):
+            background_override = self.background[
+                search_y0:search_y1,
+                search_x0:search_x1,
+            ]
+        mask, background_mask, threshold = self._build_masks(
+            gray,
+            background_override,
+        )
+        self.last_search_rect = (
+            search_x0,
+            search_y0,
+            search_x1 - search_x0,
+            search_y1 - search_y0,
+        )
+        local_prediction = (
+            predicted_center_px - search_x0
+            if predicted_center_px is not None
+            else None
+        )
         if self.semantic_fallback is not None:
             fallback = self.semantic_fallback.infer(roi_image)
-            if fallback is not None and fallback.mask.shape == mask.shape:
-                fallback_mask = np.where(fallback.mask > 0, 255, 0).astype(np.uint8)
+            if fallback is not None and fallback.mask.shape == full_gray.shape:
+                fallback_mask = np.where(
+                    fallback.mask[
+                        search_y0:search_y1,
+                        search_x0:search_x1,
+                    ]
+                    > 0,
+                    255,
+                    0,
+                ).astype(np.uint8)
                 mask = cv2.bitwise_or(mask, fallback_mask)
         contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_NONE)
         height, width = gray.shape
-        channel_center_y = (
+        channel_center_y_global = (
             self.config.channel_center_y_px
             if self.config.channel_center_y_px >= 0
-            else height * 0.5
+            else full_height * 0.5
         )
+        channel_center_y = channel_center_y_global - search_y0
         max_y_error = (
             self.config.max_center_y_error_px
             if self.config.max_center_y_error_px > 0
@@ -257,13 +375,25 @@ class BallDetector:
                 contour,
                 radius_min=self.config.radius_min_px,
                 radius_max=self.config.radius_max_px,
-                iterations=self.config.ransac_iterations,
+                iterations=(
+                    self.config.ransac_iterations_track
+                    if local_prediction is not None
+                    else self.config.ransac_iterations
+                ),
                 residual_threshold=self.config.ransac_residual_px,
                 sample_limit=self.config.contour_sample_limit,
             )
             if fit is None:
                 continue
-            fit = self._refine_from_edges(gray, fit)
+            fit = self._refine_from_edges(
+                gray,
+                fit,
+                iterations=(
+                    self.config.edge_ransac_iterations_track
+                    if local_prediction is not None
+                    else self.config.edge_ransac_iterations
+                ),
+            )
             if fit.rms > self.config.fit_rms_max_px or fit.inlier_ratio < self.config.fit_min_inlier_ratio:
                 continue
             if fit.arc_coverage < self.config.arc_coverage_min:
@@ -273,7 +403,7 @@ class BallDetector:
             )
             radius_tolerance = (
                 self.config.radius_tolerance_track_ratio
-                if predicted_center_px is not None
+                if local_prediction is not None
                 else self.config.radius_tolerance_search_ratio
             )
             if radius_error_ratio > radius_tolerance:
@@ -282,8 +412,8 @@ class BallDetector:
             if y_error > max_y_error:
                 continue
             prediction_distance = 0.0
-            if predicted_center_px is not None:
-                prediction_distance = abs(fit.center_x - predicted_center_px)
+            if local_prediction is not None:
+                prediction_distance = abs(fit.center_x - local_prediction)
                 if prediction_distance > self.config.max_prediction_distance_px:
                     continue
 
@@ -315,7 +445,7 @@ class BallDetector:
             size_scale = max(3.0, self.config.expected_radius_px * 0.65)
             size_quality = np.exp(-abs(fit.radius - self.config.expected_radius_px) / size_scale)
             y_quality = np.exp(-((y_error / max(1.0, max_y_error)) ** 2))
-            if predicted_center_px is None:
+            if local_prediction is None:
                 prediction_quality = 0.75
             else:
                 prediction_quality = np.exp(
@@ -333,11 +463,14 @@ class BallDetector:
             )
             score = float(
                 (1.0 - confidence) * 100.0
-                + prediction_distance * (0.08 if predicted_center_px is not None else 0.0)
+                + prediction_distance * (0.08 if local_prediction is not None else 0.0)
             )
             candidates.append(
                 CircleCandidate(
-                    center_px=(fit.center_x, fit.center_y),
+                    center_px=(
+                        fit.center_x + search_x0,
+                        fit.center_y + search_y0,
+                    ),
                     radius_px=fit.radius,
                     confidence=float(np.clip(confidence, 0.0, 1.0)),
                     score=score,
@@ -347,7 +480,12 @@ class BallDetector:
                     inlier_ratio=fit.inlier_ratio,
                     arc_coverage=fit.arc_coverage,
                     area_px=area,
-                    bbox=(x, y, box_width, box_height),
+                    bbox=(
+                        x + search_x0,
+                        y + search_y0,
+                        box_width,
+                        box_height,
+                    ),
                     source_mask=source_mask,
                 )
             )
@@ -361,7 +499,7 @@ class BallDetector:
                 best.confidence *= self.config.ambiguity_confidence_scale
         confidence_minimum = (
             self.config.track_confidence_min
-            if predicted_center_px is not None
+            if local_prediction is not None
             else self.config.search_confidence_min
         )
         accepted = best is not None and best.confidence >= confidence_minimum
@@ -371,12 +509,19 @@ class BallDetector:
             reason = "low_or_ambiguous_confidence"
         else:
             reason = "ok"
+        debug_mask: np.ndarray | None = None
+        if self.config.return_debug_mask:
+            debug_mask = np.zeros_like(full_gray)
+            debug_mask[
+                search_y0:search_y1,
+                search_x0:search_x1,
+            ] = mask
         return DetectionResult(
             valid=accepted,
             candidate=best,
             threshold_value=threshold,
             candidate_count=len(candidates),
-            mask=mask if self.config.return_debug_mask else None,
+            mask=debug_mask,
             reason=reason,
             candidates=tuple(candidates),
         )

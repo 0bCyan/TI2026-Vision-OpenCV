@@ -117,3 +117,81 @@ def test_partial_occlusion_still_uses_outer_arc_center() -> None:
     assert result.candidate is not None
     assert abs(result.candidate.center_px[0] - center[0]) < 1.2
     assert result.candidate.arc_coverage > 0.45
+
+
+def test_tracked_partial_occlusion_keeps_subpixel_center() -> None:
+    background = make_pipe_background()
+    center = (480.3, 80.0)
+    frame = render_ball(
+        background,
+        center_px=center,
+        radius_px=22,
+        occlusion_fraction=0.35,
+        jpeg_quality=60,
+        highlight_strength=160,
+    ).image
+    detector = detector_for_scene(background)
+
+    result = detector.detect(
+        frame,
+        predicted_center_px=478.0,
+        predicted_center_y_px=80.0,
+    )
+
+    assert result.valid, result.reason
+    assert result.candidate is not None
+    assert abs(result.candidate.center_px[0] - center[0]) < 1.2
+    assert result.candidate.arc_coverage > 0.45
+
+
+def test_predictive_search_preserves_full_roi_coordinates_and_mask() -> None:
+    background = make_pipe_background()
+    center = (480.5, 80.0)
+    frame = render_ball(
+        background,
+        center_px=center,
+        radius_px=22,
+        jpeg_quality=65,
+        highlight_strength=140,
+    ).image
+    detector = detector_for_scene(background)
+
+    result = detector.detect(
+        frame,
+        predicted_center_px=475.0,
+        predicted_center_y_px=79.0,
+    )
+
+    assert result.valid, result.reason
+    assert result.candidate is not None
+    assert abs(result.candidate.center_px[0] - center[0]) < 1.2
+    assert result.mask is not None and result.mask.shape == frame.shape[:2]
+    assert detector.last_search_rect is not None
+    search_x, search_y, search_width, search_height = detector.last_search_rect
+    assert search_x > 0
+    assert search_y > 0
+    assert search_width < frame.shape[1]
+    assert search_height < frame.shape[0]
+
+
+def test_predictive_search_excludes_far_candidate_but_global_search_recovers() -> None:
+    background = make_pipe_background()
+    frame = render_ball(
+        background,
+        center_px=(800.0, 80.0),
+        radius_px=22,
+        highlight_strength=100,
+    ).image
+    detector = detector_for_scene(background)
+
+    local_result = detector.detect(
+        frame,
+        predicted_center_px=100.0,
+        predicted_center_y_px=80.0,
+    )
+    global_result = detector.detect(frame)
+
+    assert not local_result.valid
+    assert global_result.valid
+    assert global_result.candidate is not None
+    assert abs(global_result.candidate.center_px[0] - 800.0) < 1.2

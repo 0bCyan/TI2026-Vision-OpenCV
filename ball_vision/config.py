@@ -99,7 +99,10 @@ class DetectorConfig:
     max_center_y_error_px: float = -1.0
     border_margin_px: int = 2
     max_prediction_distance_px: float = 150.0
+    predictive_search_enabled: bool = True
+    predictive_search_y_half_height_px: float = 52.0
     ransac_iterations: int = 40
+    ransac_iterations_track: int = 16
     ransac_residual_px: float = 2.2
     fit_rms_max_px: float = 4.0
     fit_min_inlier_ratio: float = 0.45
@@ -110,6 +113,7 @@ class DetectorConfig:
     edge_radial_alignment_min: float = 0.45
     edge_center_shift_max_ratio: float = 0.35
     edge_ransac_iterations: int = 24
+    edge_ransac_iterations_track: int = 8
     edge_ransac_residual_px: float = 1.6
     arc_coverage_min: float = 0.30
     search_confidence_min: float = 0.65
@@ -336,8 +340,18 @@ class AppConfig:
             raise ValueError("候选宽高比范围无效")
         if self.detector.ransac_iterations < 8:
             raise ValueError("ransac_iterations 必须至少为8")
+        if not 8 <= self.detector.ransac_iterations_track <= self.detector.ransac_iterations:
+            raise ValueError("跟踪态ransac_iterations必须在[8, ransac_iterations]内")
         if self.detector.edge_ransac_iterations < 8:
             raise ValueError("edge_ransac_iterations 必须至少为8")
+        if not (
+            8
+            <= self.detector.edge_ransac_iterations_track
+            <= self.detector.edge_ransac_iterations
+        ):
+            raise ValueError(
+                "跟踪态edge_ransac_iterations必须在[8, edge_ransac_iterations]内"
+            )
         if self.detector.contour_sample_limit < 6:
             raise ValueError("contour_sample_limit 必须至少为6")
         if min(
@@ -346,8 +360,9 @@ class AppConfig:
             self.detector.edge_ransac_residual_px,
             self.detector.edge_min_gradient,
             self.detector.max_prediction_distance_px,
+            self.detector.predictive_search_y_half_height_px,
         ) <= 0:
-            raise ValueError("拟合残差、梯度和预测距离阈值必须大于0")
+            raise ValueError("拟合残差、梯度和预测搜索阈值必须大于0")
         unit_interval_values = (
             self.detector.circularity_min,
             self.detector.fill_ratio_min,

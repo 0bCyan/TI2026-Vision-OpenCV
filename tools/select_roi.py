@@ -42,7 +42,7 @@ def main() -> None:
     if width <= 0 or height <= 0:
         print("已取消，配置未修改")
         return
-    config.roi = RoiConfig(x=x, y=y, width=width, height=height)
+    config.roi = RoiConfig(x=x, y=y, width=width, height=height, verified=True)
     config.detector.channel_center_y_px = height * 0.5
     config.detector.max_center_y_error_px = height * 0.45
     config.save()

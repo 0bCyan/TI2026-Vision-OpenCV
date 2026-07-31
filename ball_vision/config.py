@@ -8,6 +8,9 @@ from typing import Any
 
 import yaml
 
+POSITION_CONVENTION_UNVERIFIED = "unverified"
+POSITION_CONVENTION_VEHICLE_FRONT_POSITIVE = "vehicle_front_positive"
+
 
 def _section(data: Mapping[str, Any], name: str) -> dict[str, Any]:
     value = data.get(name, {})
@@ -55,6 +58,7 @@ class RoiConfig:
     y: int = 0
     width: int = 1280
     height: int = 720
+    verified: bool = False
 
     def clamp(self, frame_width: int, frame_height: int) -> tuple[int, int, int, int]:
         x = max(0, min(int(self.x), frame_width - 1))
@@ -133,6 +137,7 @@ class CalibrationConfig:
     points: list[list[float]] = field(
         default_factory=lambda: [[0.0, -125.0], [1279.0, 125.0]]
     )
+    coordinate_convention: str = POSITION_CONVENTION_UNVERIFIED
 
 
 @dataclass(slots=True)
@@ -254,6 +259,11 @@ class AppConfig:
     def validate(self) -> None:
         if self.camera.width <= 0 or self.camera.height <= 0 or self.camera.fps <= 0:
             raise ValueError("摄像头分辨率和帧率必须大于0")
+        if (
+            not math.isfinite(self.camera.timestamp_offset_ms)
+            or self.camera.timestamp_offset_ms < 0
+        ):
+            raise ValueError("camera.timestamp_offset_ms必须是非负有限数")
         if self.camera.buffer_size < 1:
             raise ValueError("camera.buffer_size 必须至少为1")
         if self.camera.read_timeout_seconds <= 0 or self.camera.reconnect_seconds <= 0:
@@ -307,6 +317,8 @@ class AppConfig:
             raise ValueError("backend=gstreamer 时必须配置 camera.gstreamer_pipeline")
         if self.roi.x < 0 or self.roi.y < 0 or self.roi.width <= 0 or self.roi.height <= 0:
             raise ValueError("ROI坐标必须非负且尺寸必须大于0")
+        if not isinstance(self.roi.verified, bool):
+            raise TypeError("roi.verified必须是布尔值")
         if self.detector.threshold.polarity not in {"dark", "bright"}:
             raise ValueError("detector.threshold.polarity 必须是 dark 或 bright")
         if self.detector.threshold.combine_mode not in {"or", "and", "intensity", "background"}:
@@ -397,6 +409,14 @@ class AppConfig:
             raise ValueError("标定多项式阶数必须小于标定点数量")
         if self.calibration.mode not in {"piecewise_linear", "polynomial"}:
             raise ValueError("calibration.mode 必须是 piecewise_linear 或 polynomial")
+        if self.calibration.coordinate_convention not in {
+            POSITION_CONVENTION_UNVERIFIED,
+            POSITION_CONVENTION_VEHICLE_FRONT_POSITIVE,
+        }:
+            raise ValueError(
+                "calibration.coordinate_convention必须是unverified或"
+                "vehicle_front_positive"
+            )
         measurement = self.measurement
         measurement_values = (
             measurement.minimum_center_sigma_px,
@@ -453,12 +473,14 @@ class AppConfig:
             raise ValueError("必须满足 0 < max_prediction_ms < lost_reset_ms")
         if self.output.udp_port <= 0 or self.output.udp_port > 65535:
             raise ValueError("UDP端口必须在[1, 65535]内")
-        if self.output.serial_baudrate <= 0:
-            raise ValueError("串口波特率必须大于0")
+        if self.output.serial_baudrate != 921600:
+            raise ValueError("MC02视觉串口固定使用921600 baud")
+        if self.output.serial_enabled and not self.output.serial_port.strip():
+            raise ValueError("启用串口输出时output.serial_port不能为空")
         if self.output.serial_reconnect_seconds <= 0:
             raise ValueError("output.serial_reconnect_seconds必须大于0")
-        if not 1_000 <= self.output.max_frame_age_us <= 1_000_000:
-            raise ValueError("output.max_frame_age_us 必须在[1000, 1000000]内")
+        if not 1_000 <= self.output.max_frame_age_us <= 80_000:
+            raise ValueError("output.max_frame_age_us 必须在[1000, 80000]内")
         if self.display.max_fps <= 0 or self.display.scale <= 0:
             raise ValueError("显示帧率和缩放必须大于0")
         if self.logging.flush_interval_seconds <= 0:

@@ -27,6 +27,20 @@ the current image. A tracker prediction must never be placed in these fields.
 When `MEASUREMENT_VALID` is clear, the encoder writes all three fields as zero
 and MC02 ignores them.
 
+## Physical position convention
+
+`POSITION` uses the MC02 beam coordinate, independent of image orientation:
+
+- The mechanical center of the beam is exactly `0 mm`.
+- Motion from the center toward the vehicle front is positive.
+- Motion from the center toward the vehicle rear is negative.
+- Production calibration must include the `0 mm` point, cover both signs, and
+  remain within the MC02 accepted range of `-125..+125 mm`.
+
+Camera mounting may make positive motion appear leftward or rightward in the
+image. The pixel-to-millimeter calibration captures that orientation; neither
+side may infer the physical sign from pixel direction.
+
 ## Flags
 
 ```text

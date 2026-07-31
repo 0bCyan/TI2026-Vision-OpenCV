@@ -78,8 +78,14 @@ class SerialPublisher:
         return self._serial_module.Serial(
             port=self.port,
             baudrate=self.baudrate,
+            bytesize=self._serial_module.EIGHTBITS,
+            parity=self._serial_module.PARITY_NONE,
+            stopbits=self._serial_module.STOPBITS_ONE,
             timeout=0,
             write_timeout=0.02,
+            xonxoff=False,
+            rtscts=False,
+            dsrdtr=False,
         )
 
     def _reset(self) -> None:

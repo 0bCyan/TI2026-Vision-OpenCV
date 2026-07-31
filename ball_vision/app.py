@@ -1,13 +1,17 @@
 from __future__ import annotations
 
 import gc
+import math
 import secrets
 import time
 
 import cv2
 
 from .capture import LatestFrameCapture
-from .config import AppConfig
+from .config import (
+    POSITION_CONVENTION_VEHICLE_FRONT_POSITIVE,
+    AppConfig,
+)
 from .output import LatestTelemetryPublisher, create_publisher
 from .pipeline import PipelineResult, VisionPipeline
 from .protocol import VisionFlags, encode_telemetry
@@ -18,6 +22,8 @@ from .visualization import DebugDisplay
 
 
 class VisionApplication:
+    _MC02_POSITION_LIMIT_MM = 125.0
+
     def __init__(self, config: AppConfig) -> None:
         self.config = config
         if config.output.serial_enabled or config.output.udp_enabled:
@@ -52,6 +58,8 @@ class VisionApplication:
     def _verify_vision_setup(self) -> None:
         issues: list[str] = []
         roi = self.config.roi
+        if not roi.verified:
+            issues.append("ROI尚未通过实车选择确认，请先运行 tools/select_roi.py")
         if (
             roi.x == 0
             and roi.y == 0
@@ -69,6 +77,28 @@ class VisionApplication:
                 )
         if len(self.config.calibration.points) < 5:
             issues.append("毫米标定点少于5个，请先运行 tools/calibrate_position.py")
+        if (
+            self.config.calibration.coordinate_convention
+            != POSITION_CONVENTION_VEHICLE_FRONT_POSITIVE
+        ):
+            issues.append(
+                "位置正方向未确认：必须为横梁中心0、车头方向正、车尾方向负"
+            )
+        millimeter_values = [float(point[1]) for point in self.config.calibration.points]
+        if not millimeter_values or not all(
+            math.isfinite(value) for value in millimeter_values
+        ):
+            issues.append("毫米标定坐标必须全部是有限数")
+        else:
+            if not any(abs(value) <= 1.0e-6 for value in millimeter_values):
+                issues.append("毫米标定缺少横梁机械中心0 mm标定点")
+            if not (min(millimeter_values) < 0.0 < max(millimeter_values)):
+                issues.append("毫米标定必须同时覆盖车尾负坐标和车头正坐标")
+            if (
+                min(millimeter_values) < -self._MC02_POSITION_LIMIT_MM
+                or max(millimeter_values) > self._MC02_POSITION_LIMIT_MM
+            ):
+                issues.append("毫米标定超出MC02允许的-125..+125 mm范围")
         camera = self.config.camera
         source_text = str(camera.source)
         live_source = (
@@ -77,6 +107,19 @@ class VisionApplication:
             or source_text.startswith(("/dev/video", "/dev/v4l/"))
             or bool(camera.gstreamer_pipeline)
         )
+        if self.config.output.serial_enabled:
+            backend = camera.backend.lower()
+            if backend == "v4l2" and not source_text.startswith("/dev/v4l/by-id/"):
+                issues.append(
+                    "正式V4L2串口输出必须使用稳定的/dev/v4l/by-id/...相机路径"
+                )
+            if (
+                backend == "gstreamer"
+                and "/dev/v4l/by-id/" not in camera.gstreamer_pipeline
+            ):
+                issues.append(
+                    "正式GStreamer串口输出必须在管线中使用/dev/v4l/by-id/..."
+                )
         if live_source:
             if (
                 not camera.reject_identical_frames

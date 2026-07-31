@@ -66,8 +66,23 @@ detector:
   aspect_ratio_max: 1.75
   channel_center_y_px: 41.0
   max_center_y_error_px: 28.0
+  radius_continuity_max_ratio: 0.08
   predictive_search_enabled: true
   predictive_search_y_half_height_px: 28.0
+  # 实拍钢球存在高光内环；径向极性边缘并与粗轮廓强一致，禁止内外环换边。
+  edge_refine_method: radial
+  edge_center_shift_max_ratio: 0.06
+  edge_radius_shift_max_ratio: 0.06
+  edge_radial_spokes: 72
+  edge_radial_step_px: 0.35
+  edge_radius_prior_sigma_px: 1.0
+  edge_radial_gradient_min: 3.0
+  edge_min_spoke_ratio: 0.45
+  edge_radial_residual_px: 0.8
+  edge_coarse_radius_outlier_ratio: 0.12
+  edge_recovery_prior_sigma_px: 2.0
+  edge_recovery_shift_max_ratio: 0.10
+  edge_temporal_radius_weight: 0.80
 
 # 2026-07-31两点实测：615.889810 px=0 mm，648.054020 px=10 mm。
 # 比例为0.310904574 mm/px；0和1279 px处的坐标由这两个实测点线性外推。
@@ -79,6 +94,12 @@ calibration:
     - [615.889810, 0.0]
     - [648.054020, 10.0]
     - [1279.0, 206.163990970087]
+
+# Action 4在OpenCV下实测约15fps，不能沿用180fps相机的25ms预测新鲜度。
+tracker:
+  max_prediction_ms: 90.0
+  lost_reset_ms: 250.0
+  max_dt_seconds: 0.08
 
 output:
   serial_enabled: false

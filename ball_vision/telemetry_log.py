@@ -15,6 +15,7 @@ class CsvTelemetryLogger:
         "frame_time_ns",
         "arrival_ns",
         "raw_center_px",
+        "raw_center_y_px",
         "raw_position_mm",
         "raw_sigma_mm",
         "raw_measurement_valid",
@@ -31,6 +32,14 @@ class CsvTelemetryLogger:
         "candidate_count",
         "threshold",
         "radius_px",
+        "initial_center_x_px",
+        "initial_center_y_px",
+        "initial_radius_px",
+        "edge_refinement_attempted",
+        "edge_refinement_accepted",
+        "edge_support_ratio",
+        "edge_center_shift_px",
+        "edge_radius_shift_px",
         "fit_rms_px",
         "arc_coverage",
         "processing_us",
@@ -64,12 +73,27 @@ class CsvTelemetryLogger:
         candidate = result.detection.candidate
         estimate = result.estimate
         measurement = result.raw_measurement
+        roi_x, roi_y, _, _ = result.roi_rect
+        raw_center_y_px = (
+            None if candidate is None else roi_y + candidate.center_px[1]
+        )
+        initial_center_x_px = (
+            None
+            if candidate is None or candidate.initial_center_px is None
+            else roi_x + candidate.initial_center_px[0]
+        )
+        initial_center_y_px = (
+            None
+            if candidate is None or candidate.initial_center_px is None
+            else roi_y + candidate.initial_center_px[1]
+        )
         self._writer.writerow(
             {
                 "frame_sequence": result.frame.sequence,
                 "frame_time_ns": result.frame.frame_time_ns,
                 "arrival_ns": result.frame.arrival_ns,
                 "raw_center_px": "" if result.raw_global_x_px is None else f"{result.raw_global_x_px:.4f}",
+                "raw_center_y_px": "" if raw_center_y_px is None else f"{raw_center_y_px:.4f}",
                 "raw_position_mm": "" if result.raw_position_mm is None else f"{result.raw_position_mm:.4f}",
                 "raw_sigma_mm": "" if measurement.sigma_mm is None else f"{measurement.sigma_mm:.4f}",
                 "raw_measurement_valid": int(measurement.valid),
@@ -86,6 +110,14 @@ class CsvTelemetryLogger:
                 "candidate_count": result.detection.candidate_count,
                 "threshold": f"{result.detection.threshold_value:.2f}",
                 "radius_px": "" if candidate is None else f"{candidate.radius_px:.3f}",
+                "initial_center_x_px": "" if initial_center_x_px is None else f"{initial_center_x_px:.4f}",
+                "initial_center_y_px": "" if initial_center_y_px is None else f"{initial_center_y_px:.4f}",
+                "initial_radius_px": "" if candidate is None or candidate.initial_radius_px is None else f"{candidate.initial_radius_px:.3f}",
+                "edge_refinement_attempted": "" if candidate is None else int(candidate.edge_refinement_attempted),
+                "edge_refinement_accepted": "" if candidate is None else int(candidate.edge_refinement_accepted),
+                "edge_support_ratio": "" if candidate is None else f"{candidate.edge_support_ratio:.4f}",
+                "edge_center_shift_px": "" if candidate is None else f"{candidate.edge_center_shift_px:.4f}",
+                "edge_radius_shift_px": "" if candidate is None else f"{candidate.edge_radius_shift_px:.4f}",
                 "fit_rms_px": "" if candidate is None else f"{candidate.fit_rms_px:.3f}",
                 "arc_coverage": "" if candidate is None else f"{candidate.arc_coverage:.4f}",
                 "processing_us": result.processing_us,

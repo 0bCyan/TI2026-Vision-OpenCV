@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import time
+from collections import deque
 from dataclasses import dataclass
 
 import numpy as np
@@ -50,6 +51,7 @@ class VisionPipeline:
         self.tracker = BallTracker(config.tracker)
         self._force_global_search = False
         self._last_detection_roi_y: float | None = None
+        self._detection_radius_history: deque[float] = deque(maxlen=5)
 
     def _local_mm_per_pixel(self, pixel_x: float) -> float:
         minimum_px, maximum_px = self.mapper.pixel_limits
@@ -166,6 +168,7 @@ class VisionPipeline:
         prediction = self.tracker.predict(packet.frame_time_ns)
         predicted_roi_x: float | None = None
         predicted_roi_y: float | None = None
+        predicted_radius_px: float | None = None
         prediction_is_fresh = (
             prediction is not None
             and self.tracker.prediction_is_fresh(packet.frame_time_ns)
@@ -175,14 +178,24 @@ class VisionPipeline:
             predicted_global_x = self.mapper.mm_to_pixel(prediction[0])
             predicted_roi_x = predicted_global_x - x
             predicted_roi_y = self._last_detection_roi_y
+            if self._detection_radius_history:
+                predicted_radius_px = float(
+                    np.median(self._detection_radius_history)
+                )
 
         detection = self.detector.detect(
             roi,
             predicted_roi_x,
             predicted_roi_y,
+            predicted_radius_px,
         )
         if detection.valid and detection.candidate is not None:
             self._last_detection_roi_y = float(detection.candidate.center_px[1])
+            if predicted_radius_px is None:
+                self._detection_radius_history.clear()
+            self._detection_radius_history.append(
+                float(detection.candidate.radius_px)
+            )
         raw_measurement = self._make_raw_measurement(
             detection,
             roi_x=x,

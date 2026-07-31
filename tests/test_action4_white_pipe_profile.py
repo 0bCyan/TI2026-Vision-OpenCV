@@ -97,6 +97,8 @@ def test_action4_profile_is_preview_only() -> None:
     assert config.resolve_path(config.detector.threshold.background_path).is_file()
     assert config.detector.ransac_iterations_track == 24
     assert config.detector.edge_ransac_iterations_track == 12
+    assert config.tracker.max_prediction_ms >= config.camera.max_frame_gap_ms
+    assert config.tracker.lost_reset_ms > config.tracker.max_prediction_ms
     assert not config.output.serial_enabled
     assert not config.output.udp_enabled
 

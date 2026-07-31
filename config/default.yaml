@@ -89,6 +89,8 @@ detector:
   max_center_y_error_px: 125.0
   border_margin_px: 2
   max_prediction_distance_px: 150.0
+  # 跟踪态半径变化必须连续，防止高光内环与物理外边缘之间换边。
+  radius_continuity_max_ratio: 0.12
   # 跟踪态只处理预测点附近、足以覆盖原有关联门限和完整钢球的横向窗口。
   # 一旦窗口内漏检，下一帧自动恢复全ROI搜索。
   predictive_search_enabled: true
@@ -100,10 +102,25 @@ detector:
   fit_min_inlier_ratio: 0.45
   contour_sample_limit: 240
   edge_refine_enabled: true
+  # radial每个方向只选一个与粗轮廓半径一致的极性边缘；canny仅用于回退。
+  edge_refine_method: radial
   edge_annulus_ratio: 0.35
   edge_min_gradient: 18.0
   edge_radial_alignment_min: 0.45
-  edge_center_shift_max_ratio: 0.35
+  edge_center_shift_max_ratio: 0.10
+  edge_radius_shift_max_ratio: 0.10
+  edge_radial_spokes: 72
+  edge_radial_step_px: 0.35
+  edge_radius_prior_sigma_px: 1.0
+  edge_radial_gradient_min: 3.0
+  edge_min_spoke_ratio: 0.45
+  edge_radial_residual_px: 0.8
+  # 仅当粗轮廓已明显偏离标定半径时放宽一次；结果必须向标定半径改善。
+  edge_coarse_radius_outlier_ratio: 0.12
+  edge_recovery_prior_sigma_px: 2.0
+  edge_recovery_shift_max_ratio: 0.10
+  # 时间半径抑制单帧换边，同时保留对透视尺度缓变的响应。
+  edge_temporal_radius_weight: 0.65
   edge_ransac_iterations: 24
   edge_ransac_iterations_track: 12
   edge_ransac_residual_px: 1.6

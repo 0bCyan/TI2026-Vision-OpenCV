@@ -31,6 +31,13 @@ class CircleCandidate:
     area_px: float
     bbox: tuple[int, int, int, int]
     source_mask: int
+    initial_center_px: Point | None = None
+    initial_radius_px: float | None = None
+    edge_refinement_attempted: bool = False
+    edge_refinement_accepted: bool = False
+    edge_support_ratio: float = 0.0
+    edge_center_shift_px: float = 0.0
+    edge_radius_shift_px: float = 0.0
 
 
 @dataclass(slots=True)

@@ -106,6 +106,7 @@ class DetectorConfig:
     max_center_y_error_px: float = -1.0
     border_margin_px: int = 2
     max_prediction_distance_px: float = 150.0
+    radius_continuity_max_ratio: float = 0.12
     predictive_search_enabled: bool = True
     predictive_search_y_half_height_px: float = 52.0
     ransac_iterations: int = 40
@@ -115,10 +116,22 @@ class DetectorConfig:
     fit_min_inlier_ratio: float = 0.45
     contour_sample_limit: int = 240
     edge_refine_enabled: bool = True
+    edge_refine_method: str = "radial"
     edge_annulus_ratio: float = 0.35
     edge_min_gradient: float = 18.0
     edge_radial_alignment_min: float = 0.45
-    edge_center_shift_max_ratio: float = 0.35
+    edge_center_shift_max_ratio: float = 0.10
+    edge_radius_shift_max_ratio: float = 0.10
+    edge_radial_spokes: int = 72
+    edge_radial_step_px: float = 0.35
+    edge_radius_prior_sigma_px: float = 1.0
+    edge_radial_gradient_min: float = 3.0
+    edge_min_spoke_ratio: float = 0.45
+    edge_radial_residual_px: float = 0.8
+    edge_coarse_radius_outlier_ratio: float = 0.12
+    edge_recovery_prior_sigma_px: float = 2.0
+    edge_recovery_shift_max_ratio: float = 0.10
+    edge_temporal_radius_weight: float = 0.65
     edge_ransac_iterations: int = 24
     edge_ransac_iterations_track: int = 12
     edge_ransac_residual_px: float = 1.6
@@ -321,6 +334,8 @@ class AppConfig:
             raise TypeError("roi.verified必须是布尔值")
         if self.detector.threshold.polarity not in {"dark", "bright"}:
             raise ValueError("detector.threshold.polarity 必须是 dark 或 bright")
+        if self.detector.edge_refine_method not in {"radial", "canny"}:
+            raise ValueError("detector.edge_refine_method 必须是 radial 或 canny")
         if self.detector.threshold.combine_mode not in {"or", "and", "intensity", "background"}:
             raise ValueError("不支持的二值掩膜组合方式")
         threshold = self.detector.threshold
@@ -373,11 +388,18 @@ class AppConfig:
             )
         if self.detector.contour_sample_limit < 6:
             raise ValueError("contour_sample_limit 必须至少为6")
+        if self.detector.edge_radial_spokes < 24:
+            raise ValueError("edge_radial_spokes 必须至少为24")
         if min(
             self.detector.ransac_residual_px,
             self.detector.fit_rms_max_px,
             self.detector.edge_ransac_residual_px,
+            self.detector.edge_radial_residual_px,
             self.detector.edge_min_gradient,
+            self.detector.edge_radial_step_px,
+            self.detector.edge_radius_prior_sigma_px,
+            self.detector.edge_recovery_prior_sigma_px,
+            self.detector.edge_radial_gradient_min,
             self.detector.max_prediction_distance_px,
             self.detector.predictive_search_y_half_height_px,
         ) <= 0:
@@ -389,6 +411,12 @@ class AppConfig:
             self.detector.edge_annulus_ratio,
             self.detector.edge_radial_alignment_min,
             self.detector.edge_center_shift_max_ratio,
+            self.detector.edge_radius_shift_max_ratio,
+            self.detector.edge_min_spoke_ratio,
+            self.detector.radius_continuity_max_ratio,
+            self.detector.edge_coarse_radius_outlier_ratio,
+            self.detector.edge_recovery_shift_max_ratio,
+            self.detector.edge_temporal_radius_weight,
             self.detector.arc_coverage_min,
             self.detector.search_confidence_min,
             self.detector.track_confidence_min,

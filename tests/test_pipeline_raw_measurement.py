@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import csv
 import time
 from dataclasses import replace
 
@@ -9,11 +10,13 @@ import pytest
 from ball_vision.config import (
     AppConfig,
     CalibrationConfig,
+    LoggingConfig,
     MeasurementConfig,
     RoiConfig,
     TrackerConfig,
 )
 from ball_vision.pipeline import VisionPipeline
+from ball_vision.telemetry_log import CsvTelemetryLogger
 from ball_vision.types import CircleCandidate, DetectionResult, FramePacket
 
 
@@ -80,7 +83,7 @@ def _process_candidate(config: AppConfig, candidate: CircleCandidate):
 
 def test_predictive_window_miss_forces_next_frame_global_search() -> None:
     pipeline = VisionPipeline(_config())
-    predicted_inputs: list[float | None] = []
+    predicted_inputs: list[tuple[float | None, float | None]] = []
     detections = [
         DetectionResult(
             valid=True,
@@ -105,8 +108,13 @@ def test_predictive_window_miss_forces_next_frame_global_search() -> None:
         ),
     ]
 
-    def detect(_image, predicted_x=None, _predicted_y=None):
-        predicted_inputs.append(predicted_x)
+    def detect(
+        _image,
+        predicted_x=None,
+        _predicted_y=None,
+        predicted_radius=None,
+    ):
+        predicted_inputs.append((predicted_x, predicted_radius))
         return detections.pop(0)
 
     pipeline.detector.detect = detect
@@ -123,9 +131,10 @@ def test_predictive_window_miss_forces_next_frame_global_search() -> None:
             )
         )
 
-    assert predicted_inputs[0] is None
-    assert predicted_inputs[1] is not None
-    assert predicted_inputs[2] is None
+    assert predicted_inputs[0] == (None, None)
+    assert predicted_inputs[1][0] is not None
+    assert predicted_inputs[1][1] == pytest.approx(16.0)
+    assert predicted_inputs[2] == (None, None)
 
 
 def test_raw_sigma_combines_fit_and_calibration_noise() -> None:
@@ -249,3 +258,35 @@ def test_default_yaml_declares_measurement_noise_model() -> None:
     assert config.measurement.calibration_rms_mm > 0
     assert config.measurement.near_edge_multiplier >= 1
     assert config.measurement.maximum_valid_sigma_mm > config.measurement.calibration_rms_mm
+
+
+def test_csv_log_includes_edge_refinement_diagnostics(tmp_path) -> None:
+    candidate = _candidate(50.0, fit_rms_px=0.4)
+    candidate.initial_center_px = (49.7, 19.8)
+    candidate.initial_radius_px = 15.8
+    candidate.edge_refinement_attempted = True
+    candidate.edge_refinement_accepted = True
+    candidate.edge_support_ratio = 0.75
+    candidate.edge_center_shift_px = 0.36
+    candidate.edge_radius_shift_px = 0.20
+    result = _process_candidate(_config(), candidate)
+    logger = CsvTelemetryLogger(
+        LoggingConfig(enabled=True, directory="."),
+        tmp_path,
+    )
+    assert logger.path is not None
+
+    logger.write(result, skipped_frames=0)
+    logger.close()
+
+    with logger.path.open(encoding="utf-8", newline="") as handle:
+        row = next(csv.DictReader(handle))
+    assert float(row["raw_center_y_px"]) == pytest.approx(20.0)
+    assert float(row["initial_center_x_px"]) == pytest.approx(49.7)
+    assert float(row["initial_center_y_px"]) == pytest.approx(19.8)
+    assert float(row["initial_radius_px"]) == pytest.approx(15.8)
+    assert row["edge_refinement_attempted"] == "1"
+    assert row["edge_refinement_accepted"] == "1"
+    assert float(row["edge_support_ratio"]) == pytest.approx(0.75)
+    assert float(row["edge_center_shift_px"]) == pytest.approx(0.36)
+    assert float(row["edge_radius_shift_px"]) == pytest.approx(0.20)

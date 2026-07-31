@@ -27,6 +27,16 @@ def render_debug(result: PipelineResult, draw_candidates: bool = True, show_mask
             cv2.circle(canvas, center, round(candidate.radius_px), (255, 120, 0), 1, cv2.LINE_AA)
     candidate = result.detection.candidate
     if candidate is not None:
+        if candidate.initial_center_px is not None and candidate.initial_radius_px is not None:
+            initial_center = tuple(round(value) for value in candidate.initial_center_px)
+            cv2.circle(
+                canvas,
+                initial_center,
+                round(candidate.initial_radius_px),
+                (255, 0, 180),
+                1,
+                cv2.LINE_AA,
+            )
         center = tuple(round(value) for value in candidate.center_px)
         cv2.circle(canvas, center, round(candidate.radius_px), (0, 255, 0), 2, cv2.LINE_AA)
         cv2.drawMarker(canvas, center, (0, 255, 0), cv2.MARKER_CROSS, 14, 1, cv2.LINE_AA)
@@ -43,10 +53,19 @@ def render_debug(result: PipelineResult, draw_candidates: bool = True, show_mask
         and measurement.sigma_mm is not None
         else f"raw=INVALID ({measurement.reason})"
     )
+    edge_text = "edge=none"
+    if candidate is not None and candidate.edge_refinement_attempted:
+        decision = "accepted" if candidate.edge_refinement_accepted else "rejected"
+        edge_text = (
+            f"edge={decision} support={candidate.edge_support_ratio:.2f} "
+            f"dc={candidate.edge_center_shift_px:.2f}px "
+            f"dr={candidate.edge_radius_shift_px:.2f}px"
+        )
     lines = [
         f"{_state_text(estimate.flags)}  x={estimate.position_mm:+7.2f} mm  v={estimate.velocity_mm_s:+7.1f} mm/s",
         raw_text,
         f"track conf={estimate.confidence:.3f} sigma={estimate.position_sigma_mm:.2f} mm candidates={result.detection.candidate_count}",
+        edge_text,
         f"process={result.processing_us / 1000.0:.2f} ms  age={result.frame_age_us / 1000.0:.2f} ms  seq={result.frame.sequence}",
     ]
     for index, text in enumerate(lines):

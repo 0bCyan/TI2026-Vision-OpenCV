@@ -234,3 +234,30 @@ def test_predictive_search_excludes_far_candidate_but_global_search_recovers() -
     assert global_result.valid
     assert global_result.candidate is not None
     assert abs(global_result.candidate.center_px[0] - 800.0) < 1.2
+
+
+def test_tracking_radius_prior_does_not_block_a_sound_coarse_contour() -> None:
+    background = make_pipe_background()
+    center = (480.0, 80.0)
+    frame = render_ball(
+        background,
+        center_px=center,
+        radius_px=22,
+        highlight_strength=120,
+    ).image
+    detector = detector_for_scene(background)
+
+    tracked_result = detector.detect(
+        frame,
+        predicted_center_px=center[0],
+        predicted_center_y_px=center[1],
+        predicted_radius_px=15.0,
+    )
+    global_result = detector.detect(frame)
+
+    assert tracked_result.valid
+    assert tracked_result.candidate is not None
+    assert tracked_result.candidate.radius_px == pytest.approx(22.0, abs=1.0)
+    assert global_result.valid
+    assert global_result.candidate is not None
+    assert global_result.candidate.radius_px == pytest.approx(22.0, abs=1.0)

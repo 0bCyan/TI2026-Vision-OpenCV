@@ -16,6 +16,9 @@ class RecordingPublisher:
         self.release = threading.Event()
         self.block_first = block_first
 
+    def prepare(self) -> None:
+        return
+
     def publish(self, packet: bytes) -> None:
         if self.block_first and not self.packets:
             self.entered.set()
@@ -42,6 +45,63 @@ def test_latest_publisher_supersedes_pending_results() -> None:
     assert target.packets == [b"first", b"latest"]
     assert publisher.stats().superseded == 1
     assert target.closed
+
+
+def test_latest_publisher_prepares_before_selecting_and_timestamping() -> None:
+    class PreparingPublisher(RecordingPublisher):
+        def __init__(self) -> None:
+            super().__init__()
+            self.prepare_entered = threading.Event()
+            self.prepare_release = threading.Event()
+            self.prepare_calls = 0
+
+        def prepare(self) -> None:
+            self.prepare_calls += 1
+            if self.prepare_calls == 1:
+                self.prepare_entered.set()
+                self.prepare_release.wait(timeout=1.0)
+
+    target = PreparingPublisher()
+    publisher = LatestTelemetryPublisher(target)
+    encoded_at: list[int] = []
+    before_prepare_ns = time.monotonic_ns()
+    publisher.submit(lambda send_ns: encoded_at.append(send_ns) or b"first")
+    assert target.prepare_entered.wait(timeout=1.0)
+    publisher.submit(lambda send_ns: encoded_at.append(send_ns) or b"latest")
+    release_ns = time.monotonic_ns()
+    target.prepare_release.set()
+    deadline = time.monotonic() + 1.0
+    while publisher.stats().sent < 1 and time.monotonic() < deadline:
+        time.sleep(0.005)
+    publisher.close()
+
+    assert target.packets == [b"latest"]
+    assert encoded_at and encoded_at[0] >= release_ns > before_prepare_ns
+    assert publisher.stats().superseded == 1
+
+
+def test_prepare_delay_is_visible_to_stale_packet_guard() -> None:
+    class DelayedPublisher(RecordingPublisher):
+        def prepare(self) -> None:
+            time.sleep(0.03)
+
+    target = DelayedPublisher()
+    publisher = LatestTelemetryPublisher(target)
+    frame_ns = time.monotonic_ns()
+
+    def reject_stale(send_ns: int) -> bytes:
+        if send_ns - frame_ns > 10_000_000:
+            raise ValueError("stale")
+        return b"incorrectly-fresh"
+
+    publisher.submit(reject_stale)
+    deadline = time.monotonic() + 1.0
+    while publisher.stats().errors < 1 and time.monotonic() < deadline:
+        time.sleep(0.005)
+    publisher.close()
+
+    assert target.packets == []
+    assert publisher.stats().errors == 1
 
 
 def test_latest_publisher_passes_send_time_to_factory() -> None:

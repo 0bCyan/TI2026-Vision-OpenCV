@@ -78,6 +78,15 @@ class VisionApplication:
             or bool(camera.gstreamer_pipeline)
         )
         if live_source:
+            if (
+                not camera.reject_identical_frames
+                and not camera.freshness_verified_externally
+            ):
+                issues.append(
+                    "尚未建立可信帧新鲜度：请在目标相机验证后启用"
+                    "reject_identical_frames，或由原生采集服务校验sequence/PTS后设置"
+                    "freshness_verified_externally=true"
+                )
             if camera.controls:
                 if not camera.strict_control_readback:
                     issues.append("已配置摄像头控制值，但strict_control_readback尚未开启")
@@ -135,12 +144,7 @@ class VisionApplication:
                     self.capture.verify_contract()
                     next_contract_check = time.monotonic() + 1.0
                 self.logger.write(result, skipped)
-                self.stats.add(
-                    result.processing_us,
-                    result.frame_age_us,
-                    result.estimate.valid,
-                    skipped,
-                )
+                self._record_runtime_stats(result, skipped)
                 key = self.display.show(result)
                 if key in (ord("q"), 27):
                     break
@@ -193,6 +197,17 @@ class VisionApplication:
 
         self.publisher.submit(encode_at)
 
+    def _record_runtime_stats(self, result: PipelineResult, skipped: int) -> None:
+        # The public protocol reports only raw current-frame measurements.
+        # Tracker validity can legitimately differ during confirmation or a
+        # protocol-level high-sigma rejection.
+        self.stats.add(
+            result.processing_us,
+            result.frame_age_us,
+            result.raw_measurement.valid,
+            skipped,
+        )
+
     def close(self) -> None:
         self.capture.stop()
         self.publisher.close()
@@ -206,6 +221,11 @@ class VisionApplication:
         publisher_stats = self.publisher.stats()
         print("\n=== Runtime summary ===")
         print(f"capture fps       : {capture_stats.measured_fps:.2f}")
+        print(
+            "read failures      : "
+            f"{capture_stats.read_failures} total/"
+            f"{capture_stats.recent_read_failures} recent"
+        )
         print(
             f"unique fps/dup     : {capture_stats.unique_fps:.2f}/"
             f"{capture_stats.duplicate_ratio * 100:.3f}%"

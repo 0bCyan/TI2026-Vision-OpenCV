@@ -37,13 +37,15 @@ class CameraConfig:
     max_interval_p99_ms: float = 15.0
     max_frame_gap_ms: float = 25.0
     max_read_p95_ms: float = 10.0
-    max_read_failures: int = 0
+    max_read_failures: int = 2
     controls: dict[str, float] = field(default_factory=dict)
     strict_control_readback: bool = False
     controls_verified_externally: bool = False
     control_tolerance: float = 0.5
     file_realtime: bool = True
     fingerprint_frames: bool = False
+    reject_identical_frames: bool = False
+    freshness_verified_externally: bool = False
     max_duplicate_ratio: float = 0.001
 
 
@@ -258,6 +260,10 @@ class AppConfig:
             raise ValueError("camera.min_measured_fps_ratio 必须在(0, 1]内")
         if not 0 <= self.camera.max_duplicate_ratio < 1:
             raise ValueError("camera.max_duplicate_ratio 必须在[0, 1)内")
+        if self.camera.reject_identical_frames and not self.camera.fingerprint_frames:
+            raise ValueError(
+                "camera.reject_identical_frames=true 时必须同时启用 fingerprint_frames"
+            )
         if self.camera.controls_verified_externally and self.camera.controls:
             raise ValueError(
                 "外部控制模式下camera.controls必须为空，避免OpenCV覆盖v4l2-ctl设置"

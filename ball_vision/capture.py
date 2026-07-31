@@ -19,6 +19,7 @@ from .types import FramePacket
 class CaptureStats:
     received_frames: int
     read_failures: int
+    recent_read_failures: int
     duplicate_fingerprints: int
     unique_frames: int
     unique_fps: float
@@ -106,6 +107,7 @@ class LatestFrameCapture:
         # window prevents an initially healthy run from hiding later slowdown.
         self._intervals_ns: deque[int] = deque(maxlen=512)
         self._read_times_ns: deque[int] = deque(maxlen=512)
+        self._read_failure_window: deque[int] = deque(maxlen=512)
         self._duplicate_window: deque[int] = deque(maxlen=512)
         self._first_arrival_ns = 0
         self._last_arrival_ns = 0
@@ -239,6 +241,20 @@ class LatestFrameCapture:
         return self
 
     def _run(self) -> None:
+        try:
+            self._capture_loop()
+        except Exception as error:  # noqa: BLE001 - thread boundary must fail closed
+            # A native backend can raise instead of returning (False, None).
+            # Never leave the process alive with a dead capture thread and a
+            # permanently true running flag.
+            if self._running:
+                self._fatal_error = error
+        finally:
+            self._running = False
+            with self._condition:
+                self._condition.notify_all()
+
+    def _capture_loop(self) -> None:
         warmup_seconds = self.config.warmup_seconds if self.is_live_source else 0.0
         warmup_deadline = time.monotonic() + max(0.0, warmup_seconds)
         replay_start_ns = time.monotonic_ns()
@@ -260,6 +276,7 @@ class LatestFrameCapture:
                 if time.monotonic() >= warmup_deadline:
                     with self._stats_lock:
                         self._read_failures += 1
+                        self._read_failure_window.append(1)
                 consecutive_failures += 1
                 if not self.is_live_source:
                     self._running = False
@@ -281,6 +298,7 @@ class LatestFrameCapture:
                     capture.release()
                     time.sleep(max(0.05, self.config.reconnect_seconds))
                     self._capture = self._open()
+                    self._reset_health_window()
                     self._fatal_error = None
                     consecutive_failures = 0
                     continue
@@ -306,7 +324,10 @@ class LatestFrameCapture:
             fingerprint: int | None = None
             duplicate = False
             if self.config.fingerprint_frames:
-                thumbnail = cv2.resize(image, (32, 18), interpolation=cv2.INTER_AREA)
+                # 160x90 retains small ball motion that a 32x18 diagnostic
+                # thumbnail can erase. It is still much cheaper than hashing
+                # the full decoded 720p frame.
+                thumbnail = cv2.resize(image, (160, 90), interpolation=cv2.INTER_AREA)
                 fingerprint = zlib.crc32(thumbnail.tobytes())
             with self._stats_lock:
                 if self._last_arrival_ns:
@@ -315,6 +336,7 @@ class LatestFrameCapture:
                     self._first_arrival_ns = arrival_ns
                 self._last_arrival_ns = arrival_ns
                 self._read_times_ns.append(read_duration_ns)
+                self._read_failure_window.append(0)
                 if fingerprint is not None:
                     if fingerprint == self._last_fingerprint:
                         self._duplicate_fingerprints += 1
@@ -322,6 +344,11 @@ class LatestFrameCapture:
                     self._last_fingerprint = fingerprint
                 self._duplicate_window.append(1 if duplicate else 0)
                 self._received += 1
+            if duplicate and self.config.reject_identical_frames:
+                # Content equality is only authoritative when the operator has
+                # explicitly enabled this fail-safe after testing the target
+                # camera. Do not refresh FRAME_ID or capture time.
+                continue
             self._sequence = (self._sequence + 1) & 0xFFFFFFFF
             offset_ns = int(self.config.timestamp_offset_ms * 1e6)
             frame_time_ns = source_frame_time_ns or (arrival_ns - offset_ns)
@@ -364,6 +391,7 @@ class LatestFrameCapture:
             read_times_ns = tuple(self._read_times_ns)
             received = self._received
             read_failures = self._read_failures
+            recent_read_failures = sum(self._read_failure_window)
             duplicates = self._duplicate_fingerprints
             duplicate_window = tuple(self._duplicate_window)
             last_arrival_ns = self._last_arrival_ns
@@ -379,6 +407,7 @@ class LatestFrameCapture:
         return CaptureStats(
             received_frames=received,
             read_failures=read_failures,
+            recent_read_failures=recent_read_failures,
             duplicate_fingerprints=duplicates,
             unique_frames=max(0, received - duplicates),
             unique_fps=float(
@@ -439,9 +468,10 @@ class LatestFrameCapture:
                 f"read耗时P95过大: {stats.read_p95_ms:.2f} ms > "
                 f"{self.config.max_read_p95_ms:.2f} ms"
             )
-        if stats.read_failures > self.config.max_read_failures:
+        if stats.recent_read_failures > self.config.max_read_failures:
             issues.append(
-                f"采集读取失败次数过多: {stats.read_failures} > "
+                "最近采集窗口读取失败次数过多: "
+                f"{stats.recent_read_failures} > "
                 f"{self.config.max_read_failures}"
             )
         if not issues:
@@ -450,6 +480,18 @@ class LatestFrameCapture:
         if self.config.strict_contract:
             raise RuntimeError(message)
         print("[WARN]", message)
+
+    def _reset_health_window(self) -> None:
+        """Start a new bounded contract window after a successful reopen."""
+
+        with self._stats_lock:
+            self._intervals_ns.clear()
+            self._read_times_ns.clear()
+            self._read_failure_window.clear()
+            self._duplicate_window.clear()
+            self._first_arrival_ns = 0
+            self._last_arrival_ns = 0
+            self._last_fingerprint = None
 
     def stop(self) -> None:
         self._running = False

@@ -71,7 +71,7 @@ import cv2
 print(cv2.getBuildInformation())
 ```
 
-若`GStreamer: NO`，使用发行版带GStreamer的OpenCV、自行编译，或用PyGObject appsink。需要真实源PTS时也应使用PyGObject或原生V4L2；`cv2.VideoCapture`通常不暴露`GstBuffer.pts`。
+若`GStreamer: NO`，使用发行版带GStreamer的OpenCV、自行编译，或用PyGObject appsink。需要真实源PTS时也应使用PyGObject或原生V4L2；`cv2.VideoCapture`通常不暴露`GstBuffer.pts`。只有独立采集服务已经校验sequence/PTS单调前进时，才可设置`camera.freshness_verified_externally: true`；否则严格模式必须使用经目标相机验证的`fingerprint_frames: true`与`reject_identical_frames: true`内容冻结保护。
 
 可以分别基准`jpegdec`、`mppjpegdec`或`v4l2jpegdec`。RK3588硬解后可能产生NV12→BGR转换和额外队列，所以必须以P95/P99端到端延迟决定，不能默认硬解一定更快。
 

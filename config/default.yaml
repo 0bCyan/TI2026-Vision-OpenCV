@@ -18,7 +18,8 @@ camera:
   max_interval_p99_ms: 15.0
   max_frame_gap_ms: 25.0
   max_read_p95_ms: 10.0
-  max_read_failures: 0
+  # 最近约512次读取窗口允许的瞬时失败数；成功重连后健康窗口会重新开始。
+  max_read_failures: 2
   # 下列数值依后端/驱动而异。接入目标相机后填写，程序会在每次打开/重连时重设并读回。
   # DirectShow手动曝光常见auto_exposure=0.25，exposure常为负档位；不要照抄示例值。
   controls:
@@ -33,6 +34,11 @@ camera:
   # 像素指纹仅作诊断，静止场景的相同图像不等于UVC重复帧。
   # tools/probe_camera.py会临时开启；正式唯一帧号应来自V4L2 sequence/PTS。
   fingerprint_frames: false
+  # 若目标相机实测证明静止画面仍有稳定传感器/MJPEG变化，可启用内容冻结保护；
+  # 启用后相同画面不会推进FRAME_ID。否则应由原生采集服务验证sequence/PTS，
+  # 并在此显式声明 freshness_verified_externally=true。
+  reject_identical_frames: false
+  freshness_verified_externally: false
   max_duplicate_ratio: 0.001
 
 # 首次接入摄像头后必须运行 tools/select_roi.py。ROI应覆盖完整水管和两端挡片，

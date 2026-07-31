@@ -174,6 +174,45 @@ def test_predictive_search_preserves_full_roi_coordinates_and_mask() -> None:
     assert search_height < frame.shape[0]
 
 
+def test_predictive_search_reuses_full_roi_segmentation() -> None:
+    background = make_pipe_background(width=960, height=160, seed=73)
+    background[:, :320] = np.clip(
+        background[:, :320].astype(np.float32) * 0.58,
+        0,
+        255,
+    ).astype(np.uint8)
+    center = (720.5, 80.0)
+    frame = render_ball(
+        background,
+        center_px=center,
+        radius_px=22,
+        jpeg_quality=60,
+        highlight_strength=150,
+    ).image
+    detector = detector_for_scene(background)
+
+    global_result = detector.detect(frame)
+    local_result = detector.detect(
+        frame,
+        predicted_center_px=center[0] - 3.0,
+        predicted_center_y_px=center[1],
+    )
+
+    assert global_result.mask is not None
+    assert local_result.mask is not None
+    assert detector.last_search_rect is not None
+    search_x, search_y, search_width, search_height = detector.last_search_rect
+    search_slice = (
+        slice(search_y, search_y + search_height),
+        slice(search_x, search_x + search_width),
+    )
+    assert local_result.threshold_value == global_result.threshold_value
+    np.testing.assert_array_equal(
+        local_result.mask[search_slice],
+        global_result.mask[search_slice],
+    )
+
+
 def test_predictive_search_excludes_far_candidate_but_global_search_recovers() -> None:
     background = make_pipe_background()
     frame = render_ball(

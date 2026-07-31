@@ -79,7 +79,6 @@ class BallDetector:
     def _build_masks(
         self,
         gray: np.ndarray,
-        background_override: np.ndarray | None = None,
     ) -> tuple[np.ndarray, np.ndarray, float]:
         threshold_config = self.config.threshold
         filtered = self._preprocess(gray)
@@ -119,9 +118,7 @@ class BallDetector:
             intensity_mask = cv2.bitwise_and(intensity_mask, local_mask)
 
         background_mask = np.zeros_like(intensity_mask)
-        background = (
-            self.background if background_override is None else background_override
-        )
+        background = self.background
         background_available = (
             threshold_config.background_enabled
             and background is not None
@@ -133,8 +130,7 @@ class BallDetector:
             if threshold_config.background_brightness_align:
                 background_median = (
                     self._background_median
-                    if background_override is None
-                    and self._background_median is not None
+                    if self._background_median is not None
                     else self._fast_median(background)
                 )
                 shift = background_median - median
@@ -207,13 +203,23 @@ class BallDetector:
         gradient_x = cv2.Scharr(blurred, cv2.CV_32F, 1, 0)[ys, xs]
         gradient_y = cv2.Scharr(blurred, cv2.CV_32F, 0, 1)[ys, xs]
         magnitude = np.hypot(gradient_x, gradient_y)
-        alignment = np.abs(gradient_x * dx + gradient_y * dy) / np.maximum(
-            1e-6, magnitude * distance
+        radial_alignment = (gradient_x * dx + gradient_y * dy) / np.maximum(
+            1e-6,
+            magnitude * distance,
+        )
+        # At a dark target's outer boundary intensity rises in the outward
+        # radial direction; a bright target has the opposite sign. Keeping
+        # the sign rejects internal highlights and the wrong side of double
+        # edges instead of allowing both through with abs(alignment).
+        polarity_alignment = (
+            radial_alignment
+            if self.config.threshold.polarity == "dark"
+            else -radial_alignment
         )
         selected = (
             radial_mask
             & (magnitude >= self.config.edge_min_gradient)
-            & (alignment >= self.config.edge_radial_alignment_min)
+            & (polarity_alignment >= self.config.edge_radial_alignment_min)
         )
         if np.count_nonzero(selected) < 12:
             return initial_fit
@@ -309,26 +315,24 @@ class BallDetector:
             if proposed_y1 - proposed_y0 >= minimum_height:
                 search_y0, search_y1 = proposed_y0, proposed_y1
 
+        # Segment the complete ROI once so adaptive intensity statistics,
+        # brightness alignment, and morphology are invariant to whether the
+        # tracker requested a predictive search window. Cropping before this
+        # step made identical pixels acquire different masks as the pipeline
+        # switched between global and tracked paths.
+        full_mask, full_background_mask, threshold = self._build_masks(full_gray)
+        if self.semantic_fallback is not None:
+            fallback = self.semantic_fallback.infer(roi_image)
+            if fallback is not None and fallback.mask.shape == full_gray.shape:
+                fallback_mask = np.where(fallback.mask > 0, 255, 0).astype(np.uint8)
+                full_mask = cv2.bitwise_or(full_mask, fallback_mask)
+
         gray = full_gray[search_y0:search_y1, search_x0:search_x1]
-        background_override: np.ndarray | None = None
-        if (
-            self.background is not None
-            and self.background.shape == full_gray.shape
-            and (
-                search_x0 != 0
-                or search_x1 != full_width
-                or search_y0 != 0
-                or search_y1 != full_height
-            )
-        ):
-            background_override = self.background[
-                search_y0:search_y1,
-                search_x0:search_x1,
-            ]
-        mask, background_mask, threshold = self._build_masks(
-            gray,
-            background_override,
-        )
+        mask = full_mask[search_y0:search_y1, search_x0:search_x1]
+        background_mask = full_background_mask[
+            search_y0:search_y1,
+            search_x0:search_x1,
+        ]
         self.last_search_rect = (
             search_x0,
             search_y0,
@@ -340,19 +344,6 @@ class BallDetector:
             if predicted_center_px is not None
             else None
         )
-        if self.semantic_fallback is not None:
-            fallback = self.semantic_fallback.infer(roi_image)
-            if fallback is not None and fallback.mask.shape == full_gray.shape:
-                fallback_mask = np.where(
-                    fallback.mask[
-                        search_y0:search_y1,
-                        search_x0:search_x1,
-                    ]
-                    > 0,
-                    255,
-                    0,
-                ).astype(np.uint8)
-                mask = cv2.bitwise_or(mask, fallback_mask)
         contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_NONE)
         height, width = gray.shape
         channel_center_y_global = (

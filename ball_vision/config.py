@@ -105,7 +105,7 @@ class DetectorConfig:
     predictive_search_enabled: bool = True
     predictive_search_y_half_height_px: float = 52.0
     ransac_iterations: int = 40
-    ransac_iterations_track: int = 16
+    ransac_iterations_track: int = 24
     ransac_residual_px: float = 2.2
     fit_rms_max_px: float = 4.0
     fit_min_inlier_ratio: float = 0.45
@@ -116,7 +116,7 @@ class DetectorConfig:
     edge_radial_alignment_min: float = 0.45
     edge_center_shift_max_ratio: float = 0.35
     edge_ransac_iterations: int = 24
-    edge_ransac_iterations_track: int = 8
+    edge_ransac_iterations_track: int = 12
     edge_ransac_residual_px: float = 1.6
     arc_coverage_min: float = 0.30
     search_confidence_min: float = 0.65

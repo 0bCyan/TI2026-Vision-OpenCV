@@ -45,12 +45,12 @@ detector:
     local_contrast_enabled: true
     local_contrast_kernel_size: 41
     local_contrast_threshold: 12
-    # 当前画面带球，不能把它采成空管背景；预览先使用白管内的暗球强度分割。
-    background_enabled: false
+    # 空管背景采自当前固定机位；与暗球强度掩膜相交，抑制接头、阴影和刻度纹理。
+    background_enabled: true
     background_path: data/action4_white_pipe_background.png
     background_diff_threshold: 18
     background_brightness_align: true
-    combine_mode: intensity
+    combine_mode: and
     morph_open_size: 3
     morph_close_size: 7
   radius_min_px: 10.0

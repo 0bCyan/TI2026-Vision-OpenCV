@@ -61,9 +61,48 @@ def test_serial_publisher_rejects_short_write() -> None:
     publisher = object.__new__(SerialPublisher)
 
     class ShortSerial:
+        def close(self) -> None:
+            return
+
         def write(self, packet: bytes) -> int:
             return len(packet) - 1
 
     publisher.serial = ShortSerial()
+    publisher.reconnect_seconds = 0.01
     with pytest.raises(OSError, match="短写"):
         publisher.publish(b"12345")
+    assert publisher.serial is None
+
+
+def test_serial_publisher_reopens_after_write_failure(monkeypatch) -> None:
+    publisher = object.__new__(SerialPublisher)
+
+    class BrokenSerial:
+        def close(self) -> None:
+            return
+
+        def write(self, packet: bytes) -> int:
+            raise OSError("disconnected")
+
+    class HealthySerial:
+        def __init__(self) -> None:
+            self.packets: list[bytes] = []
+
+        def close(self) -> None:
+            return
+
+        def write(self, packet: bytes) -> int:
+            self.packets.append(packet)
+            return len(packet)
+
+    healthy = HealthySerial()
+    publisher.serial = BrokenSerial()
+    publisher.reconnect_seconds = 0.001
+    publisher._open = lambda: healthy
+    monkeypatch.setattr(time, "sleep", lambda _: None)
+
+    with pytest.raises(OSError, match="disconnected"):
+        publisher.publish(b"first")
+    assert publisher.serial is None
+    publisher.publish(b"second")
+    assert healthy.packets == [b"second"]

@@ -49,27 +49,59 @@ class UdpPublisher:
 
 
 class SerialPublisher:
-    def __init__(self, port: str, baudrate: int) -> None:
+    def __init__(
+        self,
+        port: str,
+        baudrate: int,
+        reconnect_seconds: float = 0.25,
+    ) -> None:
         try:
             import serial
         except ImportError as error:
             raise RuntimeError("启用串口输出需要安装 pyserial") from error
-        self.serial = serial.Serial(
-            port=port,
-            baudrate=int(baudrate),
+        self._serial_module = serial
+        self.port = port
+        self.baudrate = int(baudrate)
+        self.reconnect_seconds = max(0.05, float(reconnect_seconds))
+        self.serial = self._open()
+
+    def _open(self):
+        return self._serial_module.Serial(
+            port=self.port,
+            baudrate=self.baudrate,
             timeout=0,
             write_timeout=0.02,
         )
 
+    def _reset(self) -> None:
+        try:
+            self.serial.close()
+        except OSError:
+            pass
+        self.serial = None
+
     def publish(self, packet: bytes) -> None:
-        written = self.serial.write(packet)
+        if self.serial is None:
+            time.sleep(self.reconnect_seconds)
+            try:
+                self.serial = self._open()
+            except OSError as error:
+                raise OSError(f"串口重连失败: {error}") from error
+        try:
+            written = self.serial.write(packet)
+        except OSError:
+            self._reset()
+            raise
         if written != len(packet):
+            self._reset()
             raise OSError(
                 f"串口短写: expected={len(packet)}, actual={written}"
             )
 
     def close(self) -> None:
-        self.serial.close()
+        if self.serial is not None:
+            self.serial.close()
+            self.serial = None
 
 
 class CompositePublisher:
@@ -170,7 +202,13 @@ class LatestTelemetryPublisher:
 def create_publisher(config: OutputConfig) -> Publisher:
     publishers: list[Publisher] = []
     if config.serial_enabled:
-        publishers.append(SerialPublisher(config.serial_port, config.serial_baudrate))
+        publishers.append(
+            SerialPublisher(
+                config.serial_port,
+                config.serial_baudrate,
+                config.serial_reconnect_seconds,
+            )
+        )
     if config.udp_enabled:
         publishers.append(UdpPublisher(config.udp_host, config.udp_port))
     if not publishers:

@@ -128,6 +128,7 @@ output:
   serial_enabled: false
   serial_port: COM3
   serial_baudrate: 921600
+  serial_reconnect_seconds: 0.25
   udp_enabled: false
   udp_host: 127.0.0.1
   udp_port: 25060

@@ -156,6 +156,7 @@ class OutputConfig:
     serial_enabled: bool = False
     serial_port: str = "COM3"
     serial_baudrate: int = 921600
+    serial_reconnect_seconds: float = 0.25
     udp_enabled: bool = False
     udp_host: str = "127.0.0.1"
     udp_port: int = 25060
@@ -426,6 +427,8 @@ class AppConfig:
             raise ValueError("UDP端口必须在[1, 65535]内")
         if self.output.serial_baudrate <= 0:
             raise ValueError("串口波特率必须大于0")
+        if self.output.serial_reconnect_seconds <= 0:
+            raise ValueError("output.serial_reconnect_seconds必须大于0")
         if not 1_000 <= self.output.max_frame_age_us <= 1_000_000:
             raise ValueError("output.max_frame_age_us 必须在[1000, 1000000]内")
         if self.display.max_fps <= 0 or self.display.scale <= 0:

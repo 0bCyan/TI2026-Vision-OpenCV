@@ -106,6 +106,7 @@ class LatestFrameCapture:
         # window prevents an initially healthy run from hiding later slowdown.
         self._intervals_ns: deque[int] = deque(maxlen=512)
         self._read_times_ns: deque[int] = deque(maxlen=512)
+        self._duplicate_window: deque[int] = deque(maxlen=512)
         self._first_arrival_ns = 0
         self._last_arrival_ns = 0
         self.negotiated: dict[str, Any] = {}
@@ -303,6 +304,7 @@ class LatestFrameCapture:
             if time.monotonic() < warmup_deadline:
                 continue
             fingerprint: int | None = None
+            duplicate = False
             if self.config.fingerprint_frames:
                 thumbnail = cv2.resize(image, (32, 18), interpolation=cv2.INTER_AREA)
                 fingerprint = zlib.crc32(thumbnail.tobytes())
@@ -316,8 +318,14 @@ class LatestFrameCapture:
                 if fingerprint is not None:
                     if fingerprint == self._last_fingerprint:
                         self._duplicate_fingerprints += 1
+                        duplicate = True
                     self._last_fingerprint = fingerprint
+                self._duplicate_window.append(1 if duplicate else 0)
                 self._received += 1
+            if duplicate:
+                # A frozen backend must not keep advancing FRAME_ID and link
+                # freshness. Do not publish an identical frame as new data.
+                continue
             self._sequence = (self._sequence + 1) & 0xFFFFFFFF
             offset_ns = int(self.config.timestamp_offset_ms * 1e6)
             frame_time_ns = source_frame_time_ns or (arrival_ns - offset_ns)
@@ -361,22 +369,26 @@ class LatestFrameCapture:
             received = self._received
             read_failures = self._read_failures
             duplicates = self._duplicate_fingerprints
+            duplicate_window = tuple(self._duplicate_window)
             last_arrival_ns = self._last_arrival_ns
         interval_sum_ns = sum(intervals_ns)
         measured_fps = len(intervals_ns) * 1e9 / interval_sum_ns if interval_sum_ns else 0.0
         max_gap_ms = max(intervals_ns, default=0) / 1e6
         age_ms = (now_ns - last_arrival_ns) / 1e6 if last_arrival_ns else float("inf")
+        window_duplicate_ratio = (
+            sum(duplicate_window) / len(duplicate_window)
+            if duplicate_window
+            else 0.0
+        )
         return CaptureStats(
             received_frames=received,
             read_failures=read_failures,
             duplicate_fingerprints=duplicates,
             unique_frames=max(0, received - duplicates),
             unique_fps=float(
-                measured_fps * max(0, received - duplicates) / received
-                if received
-                else 0.0
+                measured_fps * (1.0 - window_duplicate_ratio)
             ),
-            duplicate_ratio=float(duplicates / received if received else 0.0),
+            duplicate_ratio=float(window_duplicate_ratio),
             measured_fps=float(measured_fps),
             interval_p50_ms=_percentile(intervals_ns, 50),
             interval_p95_ms=_percentile(intervals_ns, 95),

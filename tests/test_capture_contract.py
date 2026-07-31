@@ -46,6 +46,7 @@ def test_capture_contract_rejects_duplicate_frames_when_fingerprinted() -> None:
     capture = make_capture(1000.0 / 180.0, (720, 1280))
     capture.config.fingerprint_frames = True
     capture._duplicate_fingerprints = 10
+    capture._duplicate_window.extend([0] * 90 + [1] * 10)
     with pytest.raises(RuntimeError, match="重复帧率过高"):
         capture.verify_contract()
 

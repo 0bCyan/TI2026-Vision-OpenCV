@@ -7,6 +7,7 @@ import cv2
 import numpy as np
 import pytest
 
+from ball_vision.calibration import CoordinateMapper
 from ball_vision.config import AppConfig
 from ball_vision.io_utils import imread_path
 from ball_vision.pipeline import VisionPipeline
@@ -19,6 +20,7 @@ BACKGROUND_PATH = (
 )
 ROI_CENTER = (602.5, 41.0)
 GLOBAL_CENTER_X = 642.5
+ZERO_REFERENCE_PIXEL = 615.889810
 
 
 def _profile() -> AppConfig:
@@ -94,6 +96,16 @@ def test_action4_profile_is_preview_only() -> None:
     assert config.resolve_path(config.detector.threshold.background_path).is_file()
     assert not config.output.serial_enabled
     assert not config.output.udp_enabled
+
+
+def test_action4_measured_reference_pixel_maps_to_zero_mm() -> None:
+    mapper = CoordinateMapper(_profile().calibration)
+
+    assert mapper.pixel_to_mm(ZERO_REFERENCE_PIXEL) == pytest.approx(0.0, abs=1e-9)
+    assert mapper.pixel_to_mm(ZERO_REFERENCE_PIXEL + 1.0) == pytest.approx(
+        250.0 / 1279.0,
+        rel=1e-9,
+    )
 
 
 @pytest.mark.parametrize(

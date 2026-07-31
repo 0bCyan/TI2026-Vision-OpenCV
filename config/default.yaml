@@ -13,7 +13,8 @@ camera:
   timestamp_offset_ms: 0.0
   warmup_seconds: 0.5
   strict_contract: false
-  min_measured_fps_ratio: 0.94
+  # 180 Hz目标下至少175 Hz。
+  min_measured_fps_ratio: 0.972222
   max_interval_p99_ms: 15.0
   max_frame_gap_ms: 25.0
   max_read_p95_ms: 10.0
@@ -29,7 +30,8 @@ camera:
   controls_verified_externally: false
   control_tolerance: 0.5
   file_realtime: true
-  fingerprint_frames: false
+  fingerprint_frames: true
+  max_duplicate_ratio: 0.001
 
 # 首次接入摄像头后必须运行 tools/select_roi.py。ROI应覆盖完整水管和两端挡片，
 # 上下仅保留约1.5个球直径的余量；当前值只是安全的全画面占位配置。
@@ -101,6 +103,13 @@ calibration:
     - [0.0, -125.0]
     - [1279.0, 125.0]
 
+measurement:
+  minimum_center_sigma_px: 0.35
+  calibration_rms_mm: 0.50
+  near_edge_margin_mm: 10.0
+  near_edge_multiplier: 1.5
+  maximum_valid_sigma_mm: 3.0
+
 tracker:
   process_accel_sigma_mm_s2: 2500.0
   measurement_sigma_mm: 0.7
@@ -122,6 +131,8 @@ output:
   udp_enabled: false
   udp_host: 127.0.0.1
   udp_port: 25060
+  # 超过该年龄的检测结果不再排队发送，MC02仍需独立判断总测量年龄。
+  max_frame_age_us: 80000
 
 display:
   enabled: true

@@ -44,6 +44,7 @@ class CameraConfig:
     control_tolerance: float = 0.5
     file_realtime: bool = True
     fingerprint_frames: bool = False
+    max_duplicate_ratio: float = 0.001
 
 
 @dataclass(slots=True)
@@ -126,6 +127,15 @@ class CalibrationConfig:
 
 
 @dataclass(slots=True)
+class MeasurementConfig:
+    minimum_center_sigma_px: float = 0.35
+    calibration_rms_mm: float = 0.50
+    near_edge_margin_mm: float = 10.0
+    near_edge_multiplier: float = 1.5
+    maximum_valid_sigma_mm: float = 3.0
+
+
+@dataclass(slots=True)
 class TrackerConfig:
     process_accel_sigma_mm_s2: float = 2500.0
     measurement_sigma_mm: float = 0.7
@@ -149,6 +159,7 @@ class OutputConfig:
     udp_enabled: bool = False
     udp_host: str = "127.0.0.1"
     udp_port: int = 25060
+    max_frame_age_us: int = 80_000
 
 
 @dataclass(slots=True)
@@ -180,6 +191,7 @@ class AppConfig:
     roi: RoiConfig = field(default_factory=RoiConfig)
     detector: DetectorConfig = field(default_factory=DetectorConfig)
     calibration: CalibrationConfig = field(default_factory=CalibrationConfig)
+    measurement: MeasurementConfig = field(default_factory=MeasurementConfig)
     tracker: TrackerConfig = field(default_factory=TrackerConfig)
     output: OutputConfig = field(default_factory=OutputConfig)
     display: DisplayConfig = field(default_factory=DisplayConfig)
@@ -199,6 +211,7 @@ class AppConfig:
             roi=RoiConfig(**_section(raw, "roi")),
             detector=DetectorConfig(threshold=threshold, **detector_raw),
             calibration=CalibrationConfig(**_section(raw, "calibration")),
+            measurement=MeasurementConfig(**_section(raw, "measurement")),
             tracker=TrackerConfig(**_section(raw, "tracker")),
             output=OutputConfig(**_section(raw, "output")),
             display=DisplayConfig(**_section(raw, "display")),
@@ -237,6 +250,12 @@ class AppConfig:
             raise ValueError("摄像头读取超时和重连时间必须大于0")
         if not 0 < self.camera.min_measured_fps_ratio <= 1:
             raise ValueError("camera.min_measured_fps_ratio 必须在(0, 1]内")
+        if not 0 <= self.camera.max_duplicate_ratio < 1:
+            raise ValueError("camera.max_duplicate_ratio 必须在[0, 1)内")
+        if self.camera.controls_verified_externally and self.camera.controls:
+            raise ValueError(
+                "外部控制模式下camera.controls必须为空，避免OpenCV覆盖v4l2-ctl设置"
+            )
         if (
             self.camera.max_interval_p99_ms <= 0
             or self.camera.max_frame_gap_ms <= 0
@@ -349,6 +368,41 @@ class AppConfig:
             raise ValueError("标定多项式阶数必须小于标定点数量")
         if self.calibration.mode not in {"piecewise_linear", "polynomial"}:
             raise ValueError("calibration.mode 必须是 piecewise_linear 或 polynomial")
+        measurement = self.measurement
+        measurement_values = (
+            measurement.minimum_center_sigma_px,
+            measurement.calibration_rms_mm,
+            measurement.near_edge_margin_mm,
+            measurement.near_edge_multiplier,
+            measurement.maximum_valid_sigma_mm,
+        )
+        if not all(math.isfinite(value) for value in measurement_values):
+            raise ValueError("measurement noise parameters must be finite")
+        if measurement.minimum_center_sigma_px <= 0:
+            raise ValueError("measurement.minimum_center_sigma_px must be greater than zero")
+        if measurement.calibration_rms_mm <= 0:
+            raise ValueError("measurement.calibration_rms_mm must be greater than zero")
+        if measurement.near_edge_margin_mm < 0:
+            raise ValueError("measurement.near_edge_margin_mm cannot be negative")
+        if measurement.near_edge_multiplier < 1:
+            raise ValueError("measurement.near_edge_multiplier must be at least one")
+        if not 0 < measurement.maximum_valid_sigma_mm <= 655.35:
+            raise ValueError(
+                "measurement.maximum_valid_sigma_mm must be in (0, 655.35]"
+            )
+        if (
+            measurement.calibration_rms_mm * measurement.near_edge_multiplier
+            > measurement.maximum_valid_sigma_mm
+        ):
+            raise ValueError(
+                "measurement noise floor exceeds maximum_valid_sigma_mm near an edge"
+            )
+        millimeter_values = [float(point[1]) for point in points]
+        calibration_span_mm = max(millimeter_values) - min(millimeter_values)
+        if measurement.near_edge_margin_mm * 2 >= calibration_span_mm:
+            raise ValueError(
+                "measurement.near_edge_margin_mm must be less than half the calibrated span"
+            )
         tracker = self.tracker
         if min(
             tracker.process_accel_sigma_mm_s2,
@@ -372,6 +426,8 @@ class AppConfig:
             raise ValueError("UDP端口必须在[1, 65535]内")
         if self.output.serial_baudrate <= 0:
             raise ValueError("串口波特率必须大于0")
+        if not 1_000 <= self.output.max_frame_age_us <= 1_000_000:
+            raise ValueError("output.max_frame_age_us 必须在[1000, 1000000]内")
         if self.display.max_fps <= 0 or self.display.scale <= 0:
             raise ValueError("显示帧率和缩放必须大于0")
         if self.logging.flush_interval_seconds <= 0:

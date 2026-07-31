@@ -44,6 +44,20 @@ class DetectionResult:
     candidates: tuple[CircleCandidate, ...] = ()
 
 
+@dataclass(slots=True, frozen=True)
+class RawMeasurement:
+    """One image-frame measurement, independent of tracker state."""
+
+    valid: bool
+    frame_time_ns: int
+    global_x_px: float | None
+    position_mm: float | None
+    sigma_mm: float | None
+    confidence: float
+    near_edge: bool
+    reason: str
+
+
 class TrackFlags(IntFlag):
     NONE = 0
     VALID = 1 << 0

@@ -11,6 +11,8 @@ from .config import OutputConfig
 
 
 class Publisher(Protocol):
+    def prepare(self) -> None: ...
+
     def publish(self, packet: bytes) -> None: ...
 
     def close(self) -> None: ...
@@ -29,6 +31,9 @@ class PublisherStats:
 
 
 class NullPublisher:
+    def prepare(self) -> None:
+        return
+
     def publish(self, packet: bytes) -> None:
         return
 
@@ -40,6 +45,9 @@ class UdpPublisher:
     def __init__(self, host: str, port: int) -> None:
         self.destination = (host, int(port))
         self.socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+
+    def prepare(self) -> None:
+        return
 
     def publish(self, packet: bytes) -> None:
         self.socket.sendto(packet, self.destination)
@@ -63,7 +71,8 @@ class SerialPublisher:
         self.port = port
         self.baudrate = int(baudrate)
         self.reconnect_seconds = max(0.05, float(reconnect_seconds))
-        self.serial = self._open()
+        self.serial = None
+        self._next_reconnect_at = 0.0
 
     def _open(self):
         return self._serial_module.Serial(
@@ -79,14 +88,27 @@ class SerialPublisher:
         except OSError:
             pass
         self.serial = None
+        self._next_reconnect_at = time.monotonic() + self.reconnect_seconds
+
+    def prepare(self) -> None:
+        """Make the serial sink writable before telemetry is timestamped."""
+
+        if self.serial is not None:
+            return
+        reconnect_at = float(getattr(self, "_next_reconnect_at", 0.0))
+        delay = reconnect_at - time.monotonic()
+        if delay > 0:
+            time.sleep(delay)
+        try:
+            self.serial = self._open()
+        except OSError as error:
+            self._next_reconnect_at = time.monotonic() + self.reconnect_seconds
+            raise OSError(f"串口重连失败: {error}") from error
+        self._next_reconnect_at = 0.0
 
     def publish(self, packet: bytes) -> None:
-        if self.serial is None:
-            time.sleep(self.reconnect_seconds)
-            try:
-                self.serial = self._open()
-            except OSError as error:
-                raise OSError(f"串口重连失败: {error}") from error
+        self.prepare()
+        assert self.serial is not None
         try:
             written = self.serial.write(packet)
         except OSError:
@@ -107,6 +129,10 @@ class SerialPublisher:
 class CompositePublisher:
     def __init__(self, publishers: list[Publisher]) -> None:
         self.publishers = publishers
+
+    def prepare(self) -> None:
+        for publisher in self.publishers:
+            publisher.prepare()
 
     def publish(self, packet: bytes) -> None:
         for publisher in self.publishers:
@@ -157,6 +183,19 @@ class LatestTelemetryPublisher:
             with self._condition:
                 while self._running and self._latest is None:
                     self._condition.wait()
+                if not self._running:
+                    return
+            try:
+                # Reconnect or otherwise ready the sink while the latest slot
+                # remains replaceable. The packet is selected and timestamped
+                # only after prepare() returns.
+                self._publisher.prepare()
+            except OSError as error:
+                with self._condition:
+                    self._errors += 1
+                print("[WARN] 遥测输出准备失败:", error)
+                continue
+            with self._condition:
                 if not self._running:
                     return
                 factory = self._latest

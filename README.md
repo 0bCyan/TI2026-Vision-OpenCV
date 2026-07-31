@@ -7,7 +7,7 @@
 ## 当前验证状态
 
 - Python语法检查通过。
-- 80项自动测试通过：圆拟合、反光、JPEG压缩、原始测量sigma、固定暗干扰、标定、跟踪、采集合约、串口恢复、最新结果发布及V2协议黄金帧/CRC/边界。
+- 90项自动测试通过：圆拟合、反光、JPEG压缩、原始测量sigma、固定暗干扰、标定、跟踪、采集合约、帧新鲜度、采集线程失效、串口恢复、重连年龄、最新结果发布及V2协议黄金帧/CRC/边界。
 - 本机合成ROI重复基准（1280×140，3×300帧）：0漏检，圆心误差RMS约0.55 px、P95约0.59 px；最近一次无并发汇总P50约2.26 ms、P95约3.88 ms、P99约6.63 ms，各轮P95约3.62～4.18 ms。尾延迟会受Windows调度影响，应以目标机多轮结果为准。
 - 上述只是算法基准，不包含USB采集和MJPEG解码。
 - 当前未连接目标720p/180fps外置UVC摄像头，因此尚未验证真实180fps、重复帧、曝光和端到端延迟。不能把标称帧率当成实测结果。
@@ -36,7 +36,7 @@ UVC MJPEG采集线程（只保留最新帧）
 MEASURED / PREDICTED / LOST / REACQUIRED + CSV日志
 ```
 
-采集、检测和遥测已解耦。采集线程与遥测线程都采用单槽“最新数据优先”，不会在堵塞后补发一串陈旧结果；`FRAME_AGE_US`在发送线程紧邻编码时计算。像素指纹只用于诊断，不能把静止场景的相同图像直接判为重复UVC帧；正式唯一帧验证最终应使用V4L2 sequence/PTS/FID。
+采集、检测和遥测已解耦。采集线程与遥测线程都采用单槽“最新数据优先”，不会在堵塞后补发一串陈旧结果；串口重连会在选择最新结果和计算`FRAME_AGE_US`之前完成，因此重连等待不能伪装成低年龄。像素指纹默认只用于诊断；若目标相机实测证明静止场景仍有稳定的传感器/MJPEG变化，可显式启用`reject_identical_frames`，使相同画面不再推进`FRAME_ID`。更可靠的正式方案仍是原生V4L2/PyGObject采集服务校验sequence/PTS/FID，再设置`freshness_verified_externally: true`。严格模式会拒绝未选择任何新鲜度策略的实时源。
 
 正式控制器必须设置独立通信看门狗：约20～30 ms没有收到CRC正确、序号更新的新包就进入视觉失联安全策略。部分OpenCV原生后端无法保证`read()`可被Python超时中断，因此不能只等待视觉程序主动发送`LOST`。
 
@@ -76,6 +76,7 @@ py -3.12 -m venv .venv
 - 协商格式确为`MJPG 1280×720@180`；
 - 实测接收率不低于约170 fps；
 - 无20～25 ms以上的频繁停顿；
+- 已建立可信帧新鲜度：目标相机验证后的内容冻结保护，或原生sequence/PTS/FID；
 - 曝光固定在1～3 ms；
 - 关闭自动曝光、自动增益、自动白平衡、自动对焦。
 
@@ -85,6 +86,9 @@ py -3.12 -m venv .venv
 
 ```yaml
 camera:
+  fingerprint_frames: true
+  reject_identical_frames: true
+  freshness_verified_externally: false
   controls:
     auto_exposure: 目标驱动的手动模式值
     exposure: 目标驱动对应1至3ms的值
@@ -95,6 +99,8 @@ camera:
 ```
 
 若香橙派启动脚本使用`v4l2-ctl`设置并读回全部控制项，必须把`camera.controls`设为空映射`{}`，再设置`camera.controls_verified_externally: true`，两种控制方式不能同时启用。systemd负责在进程退出后重新执行“设置→读回→启动”；该模式发生UVC断流时程序会退出，不会在未重设曝光的情况下自行恢复。
+
+`reject_identical_frames`不是所有相机都能安全启用：若静止场景会产生逐字节相同的正常帧，它会主动停发遥测并触发MCU看门狗。必须先用目标相机覆盖“空管静止、球静止、低增益、固定曝光”条件验证。使用能够校验原生sequence/PTS的独立采集服务时，应关闭内容拒绝并设置`freshness_verified_externally: true`；仅使用`cv2.VideoCapture`的到达时间不能视为原生PTS证明。
 
 ### 2. 选择固定ROI
 
@@ -142,7 +148,7 @@ area_max_px: 对应最大面积
 
 ### 6. 启动
 
-`--strict`会拒绝全画面占位ROI、缺失的空管背景、少于5点的毫米标定，以及不满足帧率/帧间隔/读取耗时合同的摄像头。
+`--strict`会拒绝全画面占位ROI、缺失的空管背景、少于5点的毫米标定、未验证的实时源帧新鲜度，以及不满足帧率/帧间隔/读取耗时合同的摄像头。
 
 ```powershell
 .\.venv\Scripts\python.exe run_vision.py --source 1 --backend dshow --strict
@@ -233,7 +239,8 @@ git tag --list
 
 ```text
 baseline-pre-v2        优化前完整基线
-vision-v2.0.0-alpha.2  当前V2原始测量与可靠发送版本
+vision-v2.0.0-alpha.2  V2原始测量初版
+vision-v2.0.0-alpha.3  帧新鲜度、重连年龄与采集异常修复版
 ```
 
 只查看旧版本而不移动当前分支：

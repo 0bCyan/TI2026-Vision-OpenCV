@@ -59,3 +59,73 @@ def test_external_camera_control_mode_is_mutually_exclusive() -> None:
     app_config = AppConfig(camera=config)
     with pytest.raises(ValueError, match="外部控制模式"):
         app_config.validate()
+
+
+def test_identical_frame_rejection_requires_fingerprints() -> None:
+    app_config = AppConfig(
+        camera=CameraConfig(
+            fingerprint_frames=False,
+            reject_identical_frames=True,
+        )
+    )
+    with pytest.raises(ValueError, match="fingerprint_frames"):
+        app_config.validate()
+
+
+def test_enabled_identical_frame_guard_does_not_advance_sequence() -> None:
+    config = CameraConfig(
+        source=0,
+        warmup_seconds=0.0,
+        fingerprint_frames=True,
+        reject_identical_frames=True,
+    )
+    capture = LatestFrameCapture(config)
+    image = np.zeros((32, 48, 3), dtype=np.uint8)
+
+    class FrozenBackend:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def read(self):
+            self.calls += 1
+            if self.calls >= 3:
+                capture._running = False
+            return True, image
+
+    capture._capture = FrozenBackend()
+    capture._running = True
+    capture._run()
+
+    assert capture.stats().received_frames == 3
+    assert capture.stats().duplicate_fingerprints == 2
+    assert capture._latest is not None
+    assert capture._latest.sequence == 1
+
+
+def test_capture_thread_exception_becomes_fatal_state() -> None:
+    capture = LatestFrameCapture(CameraConfig(source=0, warmup_seconds=0.0))
+
+    class ExplodingBackend:
+        def read(self):
+            raise RuntimeError("backend exploded")
+
+    capture._capture = ExplodingBackend()
+    capture._running = True
+    capture._run()
+
+    assert not capture.running
+    assert capture._fatal_error is not None
+    with pytest.raises(RuntimeError, match="采集线程失败"):
+        capture.latest(timeout=0.01)
+
+
+def test_contract_uses_bounded_recent_failure_window() -> None:
+    capture = make_capture(1000.0 / 180.0, (720, 1280))
+    capture._read_failures = 100
+    capture._read_failure_window.extend([0] * 100)
+    capture.verify_contract()
+
+    capture._read_failure_window.append(1)
+    capture.config.max_read_failures = 0
+    with pytest.raises(RuntimeError, match="最近采集窗口读取失败"):
+        capture.verify_contract()

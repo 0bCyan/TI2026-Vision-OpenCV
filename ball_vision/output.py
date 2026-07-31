@@ -1,6 +1,10 @@
 from __future__ import annotations
 
 import socket
+import threading
+import time
+from collections.abc import Callable
+from dataclasses import dataclass
 from typing import Protocol
 
 from .config import OutputConfig
@@ -10,6 +14,18 @@ class Publisher(Protocol):
     def publish(self, packet: bytes) -> None: ...
 
     def close(self) -> None: ...
+
+
+PacketFactory = Callable[[int], bytes]
+
+
+@dataclass(frozen=True, slots=True)
+class PublisherStats:
+    submitted: int
+    sent: int
+    superseded: int
+    errors: int
+    short_writes: int
 
 
 class NullPublisher:
@@ -46,7 +62,11 @@ class SerialPublisher:
         )
 
     def publish(self, packet: bytes) -> None:
-        self.serial.write(packet)
+        written = self.serial.write(packet)
+        if written != len(packet):
+            raise OSError(
+                f"串口短写: expected={len(packet)}, actual={written}"
+            )
 
     def close(self) -> None:
         self.serial.close()
@@ -66,6 +86,85 @@ class CompositePublisher:
                 publisher.close()
             except OSError as error:
                 print("[WARN] 关闭遥测输出失败:", error)
+
+
+class LatestTelemetryPublisher:
+    """Encode and publish only the newest result on one writer thread.
+
+    The factory receives the monotonic timestamp immediately before encoding,
+    so FRAME_AGE_US includes any waiting behind the previous serial write.
+    """
+
+    def __init__(self, publisher: Publisher) -> None:
+        self._publisher = publisher
+        self._condition = threading.Condition()
+        self._latest: PacketFactory | None = None
+        self._running = True
+        self._submitted = 0
+        self._sent = 0
+        self._superseded = 0
+        self._errors = 0
+        self._short_writes = 0
+        self._thread = threading.Thread(
+            target=self._run, name="telemetry-output", daemon=True
+        )
+        self._thread.start()
+
+    def submit(self, packet_factory: PacketFactory) -> None:
+        with self._condition:
+            if not self._running:
+                return
+            if self._latest is not None:
+                self._superseded += 1
+            self._latest = packet_factory
+            self._submitted += 1
+            self._condition.notify()
+
+    def _run(self) -> None:
+        while True:
+            with self._condition:
+                while self._running and self._latest is None:
+                    self._condition.wait()
+                if not self._running:
+                    return
+                factory = self._latest
+                self._latest = None
+            if factory is None:
+                continue
+            try:
+                packet = factory(time.monotonic_ns())
+                self._publisher.publish(packet)
+            except OSError as error:
+                with self._condition:
+                    self._errors += 1
+                    if "短写" in str(error):
+                        self._short_writes += 1
+                print("[WARN] 遥测输出失败:", error)
+            except (TypeError, ValueError) as error:
+                with self._condition:
+                    self._errors += 1
+                print("[WARN] 遥测编码失败:", error)
+            else:
+                with self._condition:
+                    self._sent += 1
+
+    def stats(self) -> PublisherStats:
+        with self._condition:
+            return PublisherStats(
+                submitted=self._submitted,
+                sent=self._sent,
+                superseded=self._superseded,
+                errors=self._errors,
+                short_writes=self._short_writes,
+            )
+
+    def close(self) -> None:
+        with self._condition:
+            self._running = False
+            self._latest = None
+            self._condition.notify_all()
+        self._thread.join(timeout=1.0)
+        self._publisher.close()
 
 
 def create_publisher(config: OutputConfig) -> Publisher:

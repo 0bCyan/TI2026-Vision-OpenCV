@@ -24,9 +24,10 @@ def main() -> None:
         try:
             decoded = decode_telemetry(packet)
             print(
-                f"seq={decoded.frame_sequence:10d} flags={int(decoded.flags):02x} "
-                f"x={decoded.position_mm:+7.1f}mm v={decoded.velocity_mm_s:+6d}mm/s "
-                f"conf={decoded.confidence:.3f} age={decoded.frame_age_us}us "
+                f"session={decoded.session_id:08x} frame={decoded.frame_id:10d} "
+                f"flags={int(decoded.flags):02x} x={decoded.position_mm:+7.1f}mm "
+                f"sigma={decoded.sigma_mm:.2f}mm conf={decoded.confidence}/255 "
+                f"age={decoded.frame_age_us}us "
                 f"process={decoded.processing_us}us"
             )
         except ValueError as error:
@@ -35,4 +36,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-

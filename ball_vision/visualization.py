@@ -35,9 +35,18 @@ def render_debug(result: PipelineResult, draw_candidates: bool = True, show_mask
         cv2.line(canvas, (predicted_x, 0), (predicted_x, canvas.shape[0] - 1), (0, 180, 255), 1)
 
     estimate = result.estimate
+    measurement = result.raw_measurement
+    raw_text = (
+        f"raw={measurement.position_mm:+7.2f} mm sigma={measurement.sigma_mm:.2f} mm"
+        if measurement.valid
+        and measurement.position_mm is not None
+        and measurement.sigma_mm is not None
+        else f"raw=INVALID ({measurement.reason})"
+    )
     lines = [
         f"{_state_text(estimate.flags)}  x={estimate.position_mm:+7.2f} mm  v={estimate.velocity_mm_s:+7.1f} mm/s",
-        f"conf={estimate.confidence:.3f}  sigma={estimate.position_sigma_mm:.2f} mm  candidates={result.detection.candidate_count}  threshold={result.detection.threshold_value:.1f}",
+        raw_text,
+        f"track conf={estimate.confidence:.3f} sigma={estimate.position_sigma_mm:.2f} mm candidates={result.detection.candidate_count}",
         f"process={result.processing_us / 1000.0:.2f} ms  age={result.frame_age_us / 1000.0:.2f} ms  seq={result.frame.sequence}",
     ]
     for index, text in enumerate(lines):

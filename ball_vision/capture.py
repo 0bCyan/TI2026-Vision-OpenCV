@@ -20,6 +20,9 @@ class CaptureStats:
     received_frames: int
     read_failures: int
     duplicate_fingerprints: int
+    unique_frames: int
+    unique_fps: float
+    duplicate_ratio: float
     measured_fps: float
     interval_p50_ms: float
     interval_p95_ms: float
@@ -182,7 +185,11 @@ class LatestFrameCapture:
             capture.set(cv2.CAP_PROP_FOURCC, requested_fourcc)
             capture.set(cv2.CAP_PROP_BUFFERSIZE, self.config.buffer_size)
         try:
-            control_results = self._apply_controls(capture) if self.is_live_source else {}
+            control_results = (
+                self._apply_controls(capture)
+                if self.is_live_source and not self.config.controls_verified_externally
+                else {}
+            )
         except RuntimeError:
             capture.release()
             raise
@@ -363,6 +370,13 @@ class LatestFrameCapture:
             received_frames=received,
             read_failures=read_failures,
             duplicate_fingerprints=duplicates,
+            unique_frames=max(0, received - duplicates),
+            unique_fps=float(
+                measured_fps * max(0, received - duplicates) / received
+                if received
+                else 0.0
+            ),
+            duplicate_ratio=float(duplicates / received if received else 0.0),
             measured_fps=float(measured_fps),
             interval_p50_ms=_percentile(intervals_ns, 50),
             interval_p95_ms=_percentile(intervals_ns, 95),
@@ -383,6 +397,17 @@ class LatestFrameCapture:
                 f"实测采集帧率不足: {stats.measured_fps:.1f} fps，"
                 f"要求至少 {minimum_fps:.1f} fps"
             )
+        if self.config.fingerprint_frames:
+            if stats.unique_fps < minimum_fps:
+                issues.append(
+                    f"唯一帧率不足: {stats.unique_fps:.1f} fps，"
+                    f"要求至少 {minimum_fps:.1f} fps"
+                )
+            if stats.duplicate_ratio > self.config.max_duplicate_ratio:
+                issues.append(
+                    f"重复帧率过高: {stats.duplicate_ratio * 100:.3f}% > "
+                    f"{self.config.max_duplicate_ratio * 100:.3f}%"
+                )
         with self._condition:
             latest = self._latest
         if latest is None or latest.image.shape[:2] != (self.config.height, self.config.width):

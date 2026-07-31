@@ -16,6 +16,10 @@ class CsvTelemetryLogger:
         "arrival_ns",
         "raw_center_px",
         "raw_position_mm",
+        "raw_sigma_mm",
+        "raw_measurement_valid",
+        "raw_near_edge",
+        "raw_reason",
         "filtered_position_mm",
         "velocity_mm_s",
         "position_sigma_mm",
@@ -59,6 +63,7 @@ class CsvTelemetryLogger:
             return
         candidate = result.detection.candidate
         estimate = result.estimate
+        measurement = result.raw_measurement
         self._writer.writerow(
             {
                 "frame_sequence": result.frame.sequence,
@@ -66,11 +71,15 @@ class CsvTelemetryLogger:
                 "arrival_ns": result.frame.arrival_ns,
                 "raw_center_px": "" if result.raw_global_x_px is None else f"{result.raw_global_x_px:.4f}",
                 "raw_position_mm": "" if result.raw_position_mm is None else f"{result.raw_position_mm:.4f}",
+                "raw_sigma_mm": "" if measurement.sigma_mm is None else f"{measurement.sigma_mm:.4f}",
+                "raw_measurement_valid": int(measurement.valid),
+                "raw_near_edge": int(measurement.near_edge),
+                "raw_reason": measurement.reason,
                 "filtered_position_mm": f"{estimate.position_mm:.4f}",
                 "velocity_mm_s": f"{estimate.velocity_mm_s:.3f}",
                 "position_sigma_mm": f"{estimate.position_sigma_mm:.4f}",
                 "track_flags": int(estimate.flags),
-                "measurement_valid": int(estimate.valid),
+                "measurement_valid": int(measurement.valid),
                 "confidence": f"{estimate.confidence:.5f}",
                 "lost_frames": estimate.lost_frames,
                 "innovation_mm": "" if estimate.innovation_mm is None else f"{estimate.innovation_mm:.4f}",

@@ -69,15 +69,16 @@ detector:
   predictive_search_enabled: true
   predictive_search_y_half_height_px: 28.0
 
-# 2026-07-31实测静止球心615.889810 px定义为0 mm。
-# 两端毫米值仅平移默认250 mm/1279 px临时比例；正式控制前仍需刻度尺多点标定。
+# 2026-07-31两点实测：615.889810 px=0 mm，648.054020 px=10 mm。
+# 比例为0.310904574 mm/px；0和1279 px处的坐标由这两个实测点线性外推。
 calibration:
   mode: piecewise_linear
   degree: 1
   points:
-    - [0.0, -120.385029319781]
+    - [0.0, -191.482958853956]
     - [615.889810, 0.0]
-    - [1279.0, 129.614970680219]
+    - [648.054020, 10.0]
+    - [1279.0, 206.163990970087]
 
 output:
   serial_enabled: false

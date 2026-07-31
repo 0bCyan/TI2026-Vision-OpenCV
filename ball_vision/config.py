@@ -8,6 +8,9 @@ from typing import Any
 
 import yaml
 
+POSITION_CONVENTION_UNVERIFIED = "unverified"
+POSITION_CONVENTION_VEHICLE_FRONT_POSITIVE = "vehicle_front_positive"
+
 
 def _section(data: Mapping[str, Any], name: str) -> dict[str, Any]:
     value = data.get(name, {})
@@ -55,6 +58,7 @@ class RoiConfig:
     y: int = 0
     width: int = 1280
     height: int = 720
+    verified: bool = False
 
     def clamp(self, frame_width: int, frame_height: int) -> tuple[int, int, int, int]:
         x = max(0, min(int(self.x), frame_width - 1))
@@ -126,6 +130,7 @@ class CalibrationConfig:
     points: list[list[float]] = field(
         default_factory=lambda: [[0.0, -125.0], [1279.0, 125.0]]
     )
+    coordinate_convention: str = POSITION_CONVENTION_UNVERIFIED
 
 
 @dataclass(slots=True)
@@ -305,6 +310,8 @@ class AppConfig:
             raise ValueError("backend=gstreamer 时必须配置 camera.gstreamer_pipeline")
         if self.roi.x < 0 or self.roi.y < 0 or self.roi.width <= 0 or self.roi.height <= 0:
             raise ValueError("ROI坐标必须非负且尺寸必须大于0")
+        if not isinstance(self.roi.verified, bool):
+            raise TypeError("roi.verified必须是布尔值")
         if self.detector.threshold.polarity not in {"dark", "bright"}:
             raise ValueError("detector.threshold.polarity 必须是 dark 或 bright")
         if self.detector.threshold.combine_mode not in {"or", "and", "intensity", "background"}:
@@ -380,6 +387,14 @@ class AppConfig:
             raise ValueError("标定多项式阶数必须小于标定点数量")
         if self.calibration.mode not in {"piecewise_linear", "polynomial"}:
             raise ValueError("calibration.mode 必须是 piecewise_linear 或 polynomial")
+        if self.calibration.coordinate_convention not in {
+            POSITION_CONVENTION_UNVERIFIED,
+            POSITION_CONVENTION_VEHICLE_FRONT_POSITIVE,
+        }:
+            raise ValueError(
+                "calibration.coordinate_convention必须是unverified或"
+                "vehicle_front_positive"
+            )
         measurement = self.measurement
         measurement_values = (
             measurement.minimum_center_sigma_px,

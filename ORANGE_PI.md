@@ -39,7 +39,13 @@ lsusb -t
 
 ## 2. 第一阶段：V4L2
 
-修改配置：
+先创建不会提交到仓库的实机配置，再填写相机控制、ROI、背景和标定结果：
+
+```bash
+cp config/default.yaml config/production.yaml
+```
+
+修改`config/production.yaml`：
 
 ```yaml
 camera:
@@ -48,7 +54,15 @@ camera:
   strict_contract: true
 ```
 
-运行`tools/probe_camera.py`，再完成ROI、空管背景和毫米标定。
+使用稳定设备路径运行探测工具，再完成ROI、空管背景和毫米标定。标定的物理坐标
+必须为横梁中心`0 mm`、车头方向正、车尾方向负：
+
+```bash
+.venv/bin/python tools/probe_camera.py --config config/production.yaml --source /dev/v4l/by-id/你的摄像头 --backend v4l2 --seconds 5 --strict
+.venv/bin/python tools/select_roi.py --config config/production.yaml --source /dev/v4l/by-id/你的摄像头 --backend v4l2
+.venv/bin/python tools/capture_background.py --config config/production.yaml --source /dev/v4l/by-id/你的摄像头 --backend v4l2 --frames 96
+.venv/bin/python tools/calibrate_position.py --config config/production.yaml --source /dev/v4l/by-id/你的摄像头 --backend v4l2 --confirm-front-positive
+```
 
 ## 3. 第二阶段：GStreamer低延迟比较
 
@@ -109,8 +123,11 @@ ls -l /dev/ttyS* /dev/ttyUSB* /dev/ttyAMA* 2>/dev/null || true
 ```bash
 export MC02_VISION_UART=/dev/ttyS4             # 替换为实机设备
 export VISION_TIMESTAMP_OFFSET_MS=6.3          # 替换为LED实测值
+export VISION_CONFIG=config/production.yaml
+export VISION_CAMERA_SOURCE=/dev/v4l/by-id/你的摄像头
 ./tools/run_orange_pi.sh
 ```
 
-启动器强制使用921600 8N1、无流控、单向发送，并启用摄像头严格合同；设备缺失、
-波特率错误或时间补偿未填写时会直接退出，避免静默运行却没有向MC02发送数据。
+启动器强制使用921600 8N1、无流控、单向发送，并启用摄像头严格合同。它会拒绝
+`config/default.yaml`、数字相机索引、`/dev/videoN`临时编号和不存在的设备；配置、
+设备或时间补偿未填写时会直接退出，避免静默带着占位参数向MC02发送数据。

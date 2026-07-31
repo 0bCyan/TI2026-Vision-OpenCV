@@ -7,7 +7,7 @@
 ## 当前验证状态
 
 - Python语法检查通过。
-- 90项自动测试通过：圆拟合、反光、JPEG压缩、原始测量sigma、固定暗干扰、标定、跟踪、采集合约、帧新鲜度、采集线程失效、串口恢复、重连年龄、最新结果发布及V2协议黄金帧/CRC/边界。
+- 111项自动测试通过：圆拟合、反光、JPEG压缩、原始测量sigma、固定暗干扰、标定、跟踪、采集合约、帧新鲜度、生产ROI/坐标/设备路径防误用、采集线程失效、串口恢复、重连年龄、最新结果发布及V2协议黄金帧/CRC/边界。
 - 本机合成ROI重复基准（1280×140，3×300帧）：0漏检，圆心误差RMS约0.55 px、P95约0.59 px；最近一次无并发汇总P50约2.26 ms、P95约3.88 ms、P99约6.63 ms，各轮P95约3.62～4.18 ms。尾延迟会受Windows调度影响，应以目标机多轮结果为准。
 - 上述只是算法基准，不包含USB采集和MJPEG解码。
 - 当前未连接目标720p/180fps外置UVC摄像头，因此尚未验证真实180fps、重复帧、曝光和端到端延迟。不能把标称帧率当成实测结果。
@@ -60,13 +60,21 @@ py -3.12 -m venv .venv
 
 ## 第一次接入摄像头的强制流程
 
+先从模板创建一份仅属于当前实机的配置。`config/default.yaml`故意保留未验收的
+ROI、两点占位标定和相机参数，正式启动器会拒绝使用它；
+`config/production.yaml`包含实测数据并已被Git忽略：
+
+```powershell
+Copy-Item config\default.yaml config\production.yaml
+```
+
 ### 1. 验证真实摄像头合同
 
 分别实测DirectShow与MSMF，不能相信`CAP_PROP_FPS`的报告值：
 
 ```powershell
-.\.venv\Scripts\python.exe tools\probe_camera.py --source 1 --backend dshow --seconds 5 --strict
-.\.venv\Scripts\python.exe tools\probe_camera.py --source 1 --backend msmf --seconds 5 --strict
+.\.venv\Scripts\python.exe tools\probe_camera.py --config config\production.yaml --source 1 --backend dshow --seconds 5 --strict
+.\.venv\Scripts\python.exe tools\probe_camera.py --config config\production.yaml --source 1 --backend msmf --seconds 5 --strict
 ```
 
 把示例中的摄像头索引`1`替换为目标相机的实际索引；后续所有步骤统一使用实测更好的后端。
@@ -107,7 +115,7 @@ camera:
 ROI要覆盖整个水管、两端挡片以及球心的完整有效行程，上下只留约1.3～1.6个球直径余量：
 
 ```powershell
-.\.venv\Scripts\python.exe tools\select_roi.py --source 1 --backend dshow
+.\.venv\Scripts\python.exe tools\select_roi.py --config config\production.yaml --source 1 --backend dshow
 ```
 
 ### 3. 显式采集空管背景
@@ -115,7 +123,7 @@ ROI要覆盖整个水管、两端挡片以及球心的完整有效行程，上�
 移走钢球，保留正式刻度、挡片、补光和机械位置：
 
 ```powershell
-.\.venv\Scripts\python.exe tools\capture_background.py --source 1 --backend dshow --frames 96
+.\.venv\Scripts\python.exe tools\capture_background.py --config config\production.yaml --source 1 --backend dshow --frames 96
 ```
 
 背景是多帧中位数，不会在正常运行中EMA更新，因此钢球长期静止也不会被背景模型“吃掉”。
@@ -124,17 +132,20 @@ ROI要覆盖整个水管、两端挡片以及球心的完整有效行程，上�
 
 ### 4. 毫米位置标定
 
-按照提示依次点击已知刻度。默认从-120 mm到+120 mm，每10 mm一点：
+按照提示依次点击已知刻度。坐标合同固定为横梁机械中心`0 mm`、车头方向为正、
+车尾方向为负；图像左右方向不能代替这个物理定义。默认从-120 mm到+120 mm，
+每10 mm一点：
 
 ```powershell
-.\.venv\Scripts\python.exe tools\calibrate_position.py --source 1 --backend dshow
+.\.venv\Scripts\python.exe tools\calibrate_position.py --config config\production.yaml --source 1 --backend dshow --confirm-front-positive
 ```
 
 正式标定建议5～10 mm间隔。随后必须用错开的5 mm位置独立验证，不能只检查标定点。映射采用单调分段线性插值，避免高阶多项式端部发散。
 
 ### 5. 调整球像素尺寸
 
-运行主程序，观察调试画面中的拟合圆半径，并修改[default.yaml](config/default.yaml)中的：
+运行主程序，观察调试画面中的拟合圆半径，并修改本机
+`config/production.yaml`中的：
 
 ```yaml
 radius_min_px: 真实半径的约0.65倍
@@ -148,16 +159,18 @@ area_max_px: 对应最大面积
 
 ### 6. 启动
 
-`--strict`会拒绝全画面占位ROI、缺失的空管背景、少于5点的毫米标定、未验证的实时源帧新鲜度，以及不满足帧率/帧间隔/读取耗时合同的摄像头。
+`--strict`会拒绝未确认或全画面的占位ROI、缺失的空管背景、少于5点的毫米标定、
+未确认的物理坐标方向、未覆盖中心及正负行程、未验证的实时源帧新鲜度，以及不满足
+帧率/帧间隔/读取耗时合同的摄像头。
 
 ```powershell
-.\.venv\Scripts\python.exe run_vision.py --source 1 --backend dshow --strict
+.\.venv\Scripts\python.exe run_vision.py --config config\production.yaml --source 1 --backend dshow --strict
 ```
 
 按`Q`或`Esc`退出。无显示运行：
 
 ```powershell
-.\.venv\Scripts\python.exe run_vision.py --source 1 --backend dshow --strict --headless
+.\.venv\Scripts\python.exe run_vision.py --config config\production.yaml --source 1 --backend dshow --strict --headless
 ```
 
 处理录像：
@@ -241,7 +254,8 @@ git tag --list
 baseline-pre-v2        优化前完整基线
 vision-v2.0.0-alpha.2  V2原始测量初版
 vision-v2.0.0-alpha.3  帧新鲜度、重连年龄与采集异常修复版
-vision-v2.0.0-alpha.4  当前生产UART、固定延迟与严格启动合同版
+vision-v2.0.0-alpha.4  生产UART、固定延迟与严格启动合同版
+vision-v2.0.0-alpha.5  当前物理坐标合同与正式配置防误用版
 ```
 
 只查看旧版本而不移动当前分支：

@@ -44,6 +44,8 @@ camera:
 # 首次接入摄像头后必须运行 tools/select_roi.py。ROI应覆盖完整水管和两端挡片，
 # 上下仅保留约1.5个球直径的余量；当前值只是安全的全画面占位配置。
 roi:
+  # 必须由tools/select_roi.py写成true；非全画面并不等于已经实车验收。
+  verified: false
   x: 50
   y: 220
   width: 980
@@ -107,6 +109,8 @@ detector:
 calibration:
   mode: piecewise_linear
   degree: 1
+  # 标定工具显式确认“中心0、车头正、车尾负”后才会改写此字段。
+  coordinate_convention: unverified
   points:
     - [0.0, -125.0]
     - [1279.0, 125.0]

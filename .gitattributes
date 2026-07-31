@@ -5,6 +5,7 @@
 *.yml text eol=lf
 *.toml text eol=lf
 *.txt text eol=lf
+*.sh text eol=lf
 *.png binary
 *.mkv binary
 *.avi binary

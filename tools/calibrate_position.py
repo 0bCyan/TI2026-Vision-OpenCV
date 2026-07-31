@@ -11,7 +11,11 @@ import cv2
 
 from ball_vision.calibration import CoordinateMapper
 from ball_vision.capture import LatestFrameCapture
-from ball_vision.config import AppConfig, CalibrationConfig
+from ball_vision.config import (
+    POSITION_CONVENTION_VEHICLE_FRONT_POSITIVE,
+    AppConfig,
+    CalibrationConfig,
+)
 from ball_vision.io_utils import imread_path
 
 
@@ -33,6 +37,12 @@ def main() -> None:
         default=",".join(str(value) for value in range(-120, 121, 10)),
         help="comma-separated known coordinates in click order",
     )
+    parser.add_argument(
+        "--confirm-front-positive",
+        action="store_true",
+        required=True,
+        help="confirm 0=center, positive=toward vehicle front, negative=toward rear",
+    )
     args = parser.parse_args()
     config = AppConfig.load(args.config)
     if args.image:
@@ -53,6 +63,8 @@ def main() -> None:
     positions = parse_positions(args.positions_mm)
     if len(positions) < 2:
         raise ValueError("至少需要两个标定位置")
+    print("坐标合同：横梁机械中心为0 mm，车头方向为正，车尾方向为负。")
+    print("请按提示的物理刻度顺序点击；图像左右方向不代表坐标正负。")
     roi_x, roi_y, roi_width, roi_height = config.roi.clamp(frame.shape[1], frame.shape[0])
     roi = frame[roi_y : roi_y + roi_height, roi_x : roi_x + roi_width].copy()
     clicked: list[tuple[float, float]] = []
@@ -96,6 +108,7 @@ def main() -> None:
         mode="piecewise_linear",
         degree=1,
         points=[[pixel, position] for pixel, position in clicked],
+        coordinate_convention=POSITION_CONVENTION_VEHICLE_FRONT_POSITIVE,
     )
     mapper = CoordinateMapper(config.calibration)
     config.save()

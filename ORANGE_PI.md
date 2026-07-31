@@ -6,7 +6,9 @@
 
 ```bash
 sudo apt update
-sudo apt install -y python3-opencv python3-numpy python3-yaml python3-serial v4l-utils gstreamer1.0-tools
+sudo apt install -y python3-opencv python3-numpy python3-yaml python3-serial v4l-utils \
+  gstreamer1.0-tools gstreamer1.0-plugins-base gstreamer1.0-plugins-good \
+  gir1.2-gstreamer-1.0 gir1.2-gst-plugins-base-1.0 python3-gi
 python3 -m venv --system-site-packages .venv
 .venv/bin/python -m pip install -r requirements-orange-pi.txt
 ```
@@ -15,6 +17,7 @@ python3 -m venv --system-site-packages .venv
 
 ```bash
 .venv/bin/python -c "import cv2; print(cv2.__file__); print(cv2.getBuildInformation())"
+gst-inspect-1.0 v4l2src jpegparse jpegdec videoconvert appsink
 ```
 
 ## 1. 验证UVC真实能力
@@ -32,7 +35,7 @@ lsusb -t
 
 锁定1～3 ms曝光，关闭自动曝光、自动增益、自动白平衡和自动对焦。控制名称和值以实际`v4l2-ctl --list-ctrls-menus`为准，不要照搬Windows的OpenCV属性值。
 
-正式启动脚本应先执行并读回`v4l2-ctl --set-ctrl ...`；成功后设置`camera.controls_verified_externally: true`，并让systemd在进程退出后重新执行“设置→读回→启动”。该模式遇到UVC断流会主动退出，避免自动重连后悄悄恢复自动曝光。也可把已验证的OpenCV等价值写入`camera.controls`，程序会在UVC重连后重新应用。板端优先以`v4l2-ctl --get-ctrl`作为最终验真，因为不同驱动对OpenCV控制属性的映射并不统一。
+正式启动脚本应先执行并读回`v4l2-ctl --set-ctrl ...`；成功后把`camera.controls`设为`{}`并设置`camera.controls_verified_externally: true`，再让systemd在进程退出后重新执行“设置→读回→启动”。外部控制和OpenCV控制互斥，防止程序覆盖已验真的曝光。该模式遇到UVC断流会主动退出，避免自动重连后悄悄恢复自动曝光。
 
 ## 2. 第一阶段：V4L2
 

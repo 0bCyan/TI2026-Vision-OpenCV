@@ -1,13 +1,13 @@
 # TI 2026 H题滚球视觉（OpenCV重构版）
 
-这是一套面向“摄像头随摆杆刚性运动、相机与水管相对固定”的低延迟视觉测量工程。它不直接控制电机，只向实时控制器输出钢球位置、速度、测量方差、状态、帧号和数据新鲜度。
+这是一套面向“摄像头随摆杆刚性运动、相机与水管相对固定”的低延迟视觉测量工程。它不直接控制电机，只向实时控制器发送本帧钢球原始位置、原始测量不确定度、状态、会话号、帧号和数据年龄；Tracker速度与滤波位置仅供视觉内部关联和调试。
 
 当前版本优先完成纯 OpenCV 主链，并为后续异步 YOLO-Seg/RKNN 粗分割保留接口。神经网络即使加入，也只提供候选Mask，最终位置仍由原始分辨率边缘圆拟合给出。
 
 ## 当前验证状态
 
 - Python语法检查通过。
-- 22项自动测试通过：圆拟合、反光、JPEG压缩、固定暗干扰、错误半径、离散短弧、标定、乱序时间戳、失联重捕、采集合约和协议CRC。
+- 79项自动测试通过：圆拟合、反光、JPEG压缩、原始测量sigma、固定暗干扰、标定、跟踪、采集合约、最新结果发布及V2协议黄金帧/CRC/边界。
 - 本机合成ROI重复基准（1280×140，3×300帧）：0漏检，圆心误差RMS约0.55 px、P95约0.59 px；最近一次无并发汇总P50约2.26 ms、P95约3.88 ms、P99约6.63 ms，各轮P95约3.62～4.18 ms。尾延迟会受Windows调度影响，应以目标机多轮结果为准。
 - 上述只是算法基准，不包含USB采集和MJPEG解码。
 - 当前未连接目标720p/180fps外置UVC摄像头，因此尚未验证真实180fps、重复帧、曝光和端到端延迟。不能把标称帧率当成实测结果。
@@ -29,14 +29,14 @@ UVC MJPEG采集线程（只保留最新帧）
     ↓
 单调分段线性 像素→毫米 标定
     ↓
-毫米域可变dt Kalman [位置, 速度]
+原始位置 + 圆拟合/标定测量sigma ──────────────→ V2遥测
     ↓
-MEASURED / PREDICTED / LOST / REACQUIRED
+毫米域可变dt Tracker [位置, 速度]（仅ROI、关联和调试）
     ↓
-CRC16串口或UDP遥测 + CSV日志
+MEASURED / PREDICTED / LOST / REACQUIRED + CSV日志
 ```
 
-采集、检测、显示和遥测已解耦。采集线程不使用普通FIFO队列，消费者永远获取最新一帧，避免180fps下处理旧画面。
+采集、检测和遥测已解耦。采集线程与遥测线程都采用单槽“最新数据优先”，不会在堵塞后补发一串陈旧结果；`FRAME_AGE_US`在发送线程紧邻编码时计算。
 
 正式控制器必须设置独立通信看门狗：约20～30 ms没有收到CRC正确、序号更新的新包就进入视觉失联安全策略。部分OpenCV原生后端无法保证`read()`可被Python超时中断，因此不能只等待视觉程序主动发送`LOST`。
 
@@ -94,7 +94,7 @@ camera:
   strict_control_readback: true
 ```
 
-若香橙派启动脚本使用`v4l2-ctl`设置并读回全部控制项，可不重复走OpenCV属性，但要在确认脚本确实成功后设置`camera.controls_verified_externally: true`，并用systemd等监护进程负责重新设置后再启动。该模式发生UVC断流时程序会退出，不会在未重设曝光的情况下自行恢复。正式串口/UDP输出会拒绝“控制项既未程序读回、也未外部验真”的配置。
+若香橙派启动脚本使用`v4l2-ctl`设置并读回全部控制项，必须把`camera.controls`设为空映射`{}`，再设置`camera.controls_verified_externally: true`，两种控制方式不能同时启用。systemd负责在进程退出后重新执行“设置→读回→启动”；该模式发生UVC断流时程序会退出，不会在未重设曝光的情况下自行恢复。
 
 ### 2. 选择固定ROI
 
@@ -171,7 +171,7 @@ area_max_px: 对应最大面积
 
 ## 输出状态
 
-- `VALID`：当前输出由本帧有效测量更新；
+- `MEASUREMENT_VALID`：当前包包含本帧真实原始测量；
 - `PREDICTED`：本帧没测到球，只提供短时预测，绝不能当作有效测量；
 - `LOST`：连续丢失，控制器必须进入安全策略；
 - `REACQUIRED`：刚完成时空一致确认并重捕；
@@ -180,16 +180,12 @@ area_max_px: 对应最大面积
 视觉输出包括：
 
 ```text
-position_mm
-velocity_mm_s
-position_sigma_mm
-confidence
-flags
-frame_sequence
-frame_time_us（单机单调时钟，32位回绕）
-frame_age_us
-processing_us
-CRC16
+SESSION_ID + FRAME_ID
+POSITION（原始测量，0.1 mm）
+SIGMA（圆拟合和标定组成的原始测量sigma，0.01 mm）
+FLAGS + CONFIDENCE
+FRAME_AGE_US + PROCESSING_US
+CRC16-CCITT-FALSE
 ```
 
 OpenCV摄像头到达时间只是“解码完成到达应用”的时刻，不是真实曝光时刻。`camera.timestamp_offset_ms`只能补偿实测固定延迟。最终应使用视野内LED和逻辑分析仪测量光子到控制输出的P50/P95/P99。

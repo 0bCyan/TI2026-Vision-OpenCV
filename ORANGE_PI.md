@@ -97,6 +97,7 @@ print(cv2.getBuildInformation())
 - appsink必须`max-buffers=1 drop=true sync=false`。
 - 显示、无线图传和录像限制在20～30fps，不能放入采集或检测线程。
 - 比较`runtime.opencv_threads=1/2/4`的P50/P95/P99，选尾延迟最小的配置。
+- 分别运行合成基准的`--mode search`、`--mode track`和`--mode pipeline`；正式控制主要看pipeline多轮P95/P99，不能只引用局部窗口的最好一次结果。
 - 正式运行建议关闭Python循环GC，程序退出时恢复并回收。
 
 ## 5. 最终延迟验证

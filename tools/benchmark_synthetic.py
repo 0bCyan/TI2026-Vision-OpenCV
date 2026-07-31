@@ -12,19 +12,42 @@ sys.path.insert(0, str(PROJECT_ROOT))
 import cv2
 import numpy as np
 
-from ball_vision.config import DetectorConfig, ThresholdConfig
+from ball_vision.config import (
+    AppConfig,
+    CalibrationConfig,
+    DetectorConfig,
+    RoiConfig,
+    ThresholdConfig,
+)
 from ball_vision.detector import BallDetector
+from ball_vision.pipeline import VisionPipeline
 from ball_vision.synthetic import make_pipe_background, render_ball
+from ball_vision.types import FramePacket
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Deterministic OpenCV detector benchmark")
+    parser = argparse.ArgumentParser(description="Deterministic OpenCV vision benchmark")
     parser.add_argument("--frames", type=int, default=300)
     parser.add_argument("--width", type=int, default=1280)
     parser.add_argument("--height", type=int, default=140)
     parser.add_argument("--radius", type=float, default=24.0)
     parser.add_argument("--warmup", type=int, default=20)
     parser.add_argument("--repeats", type=int, default=3)
+    parser.add_argument(
+        "--mode",
+        choices=("search", "track", "pipeline"),
+        default="search",
+        help=(
+            "search scans the full ROI; track feeds the previous detected center; "
+            "pipeline runs the real tracker and one-miss global fallback"
+        ),
+    )
+    parser.add_argument(
+        "--max-p95-ms",
+        type=float,
+        default=None,
+        help="optional hardware acceptance threshold; exits 2 when exceeded",
+    )
     parser.add_argument(
         "--combine-mode",
         choices=("and", "or", "background", "intensity"),
@@ -84,22 +107,78 @@ def main() -> None:
         truths.append((center_x, center_y))
 
     repeat_timings_ms: list[np.ndarray] = []
+    repeat_global_scans: list[int] = []
     errors_px: list[float] = []
     failures = 0
     was_gc_enabled = gc.isenabled()
     gc.disable()
     try:
         for _ in range(max(1, args.repeats)):
+            predicted_x: float | None = None
+            predicted_y: float | None = None
             for image in frames[: min(len(frames), max(0, args.warmup))]:
-                detector.detect(image)
+                result = detector.detect(
+                    image,
+                    predicted_x if args.mode == "track" else None,
+                    predicted_y if args.mode == "track" else None,
+                )
+                if result.valid and result.candidate is not None:
+                    predicted_x, predicted_y = result.candidate.center_px
+            predicted_x = None
+            predicted_y = None
+            pipeline: VisionPipeline | None = None
+            frame_start_ns = time.monotonic_ns()
+            if args.mode == "pipeline":
+                app_config = AppConfig(
+                    roi=RoiConfig(
+                        x=0,
+                        y=0,
+                        width=args.width,
+                        height=args.height,
+                    ),
+                    detector=config,
+                    calibration=CalibrationConfig(
+                        points=[
+                            [0.0, -125.0],
+                            [float(args.width - 1), 125.0],
+                        ]
+                    ),
+                )
+                app_config.validate()
+                pipeline = VisionPipeline(app_config)
+                pipeline.detector.set_background(background)
             timings_ms: list[float] = []
-            for image, truth in zip(frames, truths):
+            global_scans = 0
+            for frame_index, (image, truth) in enumerate(zip(frames, truths)):
                 start_ns = time.perf_counter_ns()
-                result = detector.detect(image)
+                if pipeline is not None:
+                    frame_time_ns = frame_start_ns + frame_index * int(1e9 / 180.0)
+                    pipeline_result = pipeline.process(
+                        FramePacket(
+                            sequence=frame_index + 1,
+                            arrival_ns=frame_time_ns,
+                            frame_time_ns=frame_time_ns,
+                            read_duration_ns=0,
+                            image=image,
+                        )
+                    )
+                    result = pipeline_result.detection
+                    measurement_valid = pipeline_result.raw_measurement.valid
+                    search_rect = pipeline.detector.last_search_rect
+                    if search_rect == (0, 0, args.width, args.height):
+                        global_scans += 1
+                else:
+                    result = detector.detect(
+                        image,
+                        predicted_x if args.mode == "track" else None,
+                        predicted_y if args.mode == "track" else None,
+                    )
+                    measurement_valid = result.valid
                 timings_ms.append((time.perf_counter_ns() - start_ns) / 1e6)
-                if not result.valid or result.candidate is None:
+                if not measurement_valid or result.candidate is None:
                     failures += 1
                     continue
+                predicted_x, predicted_y = result.candidate.center_px
                 errors_px.append(
                     float(
                         np.hypot(
@@ -109,17 +188,21 @@ def main() -> None:
                     )
                 )
             repeat_timings_ms.append(np.asarray(timings_ms))
+            repeat_global_scans.append(global_scans)
     finally:
         if was_gc_enabled:
             gc.enable()
     timing = np.concatenate(repeat_timings_ms)
     errors = np.asarray(errors_px) if errors_px else np.array([np.inf])
-    print("=== Synthetic detector benchmark ===")
+    print("=== Synthetic vision benchmark ===")
     print(f"OpenCV threads : {cv2.getNumThreads()}")
     print(f"ROI            : {args.width}x{args.height}")
     print(f"Mask mode      : {args.combine_mode}")
+    print(f"Search mode    : {args.mode}")
     print(f"Frames         : {count} x {len(repeat_timings_ms)} runs")
     print(f"Failures       : {failures}")
+    if args.mode == "pipeline":
+        print(f"Global scans   : {repeat_global_scans}")
     for index, run_timing in enumerate(repeat_timings_ms, start=1):
         print(
             f"Run {index} ms       : "
@@ -131,7 +214,15 @@ def main() -> None:
     print(f"Equivalent fps : mean={1000.0/np.mean(timing):.1f}")
     print(f"Center error px: rms={np.sqrt(np.mean(errors*errors)):.3f}, p95={np.percentile(errors,95):.3f}, max={np.max(errors):.3f}")
     print("说明：这是确定性合成ROI算法基准，不包含USB采集和MJPEG解码延迟。")
-    if failures or np.percentile(errors, 95) > 1.0:
+    latency_failed = (
+        args.max_p95_ms is not None
+        and np.percentile(timing, 95) > args.max_p95_ms
+    )
+    if latency_failed:
+        print(
+            f"FAIL: processing P95 exceeds {args.max_p95_ms:.3f} ms acceptance limit"
+        )
+    if failures or np.percentile(errors, 95) > 1.0 or latency_failed:
         raise SystemExit(2)
 
 

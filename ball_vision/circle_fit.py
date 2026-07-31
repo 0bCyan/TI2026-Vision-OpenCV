@@ -72,9 +72,11 @@ def fit_circle_ransac(
         indices = np.linspace(0, len(points) - 1, sample_limit, dtype=np.int32)
         points = points[indices]
 
-    # A stable seed makes offline comparisons reproducible without making the
-    # sampled triplets depend on thread scheduling.
-    seed = int((points[0, 0] * 73856093 + points[0, 1] * 19349663 + len(points)) % (2**32))
+    # RANSAC samples point indices, so their sequence does not need absolute
+    # coordinates in its seed. Depending only on the contour length keeps the
+    # fit deterministic and translation invariant when an identical contour
+    # is expressed in a cropped predictive-search coordinate system.
+    seed = int((len(points) * 0x9E3779B1) & 0xFFFFFFFF)
     rng = np.random.default_rng(seed)
     iteration_count = max(8, int(iterations))
     # Generate extra triplets once, discard repeated indices, and solve all

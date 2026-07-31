@@ -78,6 +78,56 @@ def _process_candidate(config: AppConfig, candidate: CircleCandidate):
     )
 
 
+def test_predictive_window_miss_forces_next_frame_global_search() -> None:
+    pipeline = VisionPipeline(_config())
+    predicted_inputs: list[float | None] = []
+    detections = [
+        DetectionResult(
+            valid=True,
+            candidate=_candidate(50.0, 0.5),
+            threshold_value=100.0,
+            candidate_count=1,
+            reason="ok",
+        ),
+        DetectionResult(
+            valid=False,
+            candidate=None,
+            threshold_value=100.0,
+            candidate_count=0,
+            reason="missing",
+        ),
+        DetectionResult(
+            valid=False,
+            candidate=None,
+            threshold_value=100.0,
+            candidate_count=0,
+            reason="missing",
+        ),
+    ]
+
+    def detect(_image, predicted_x=None, _predicted_y=None):
+        predicted_inputs.append(predicted_x)
+        return detections.pop(0)
+
+    pipeline.detector.detect = detect
+    start_ns = time.monotonic_ns()
+    for index in range(3):
+        frame_time_ns = start_ns + index * 5_000_000
+        pipeline.process(
+            FramePacket(
+                sequence=index + 1,
+                arrival_ns=frame_time_ns,
+                frame_time_ns=frame_time_ns,
+                read_duration_ns=0,
+                image=np.zeros((40, 101, 3), dtype=np.uint8),
+            )
+        )
+
+    assert predicted_inputs[0] is None
+    assert predicted_inputs[1] is not None
+    assert predicted_inputs[2] is None
+
+
 def test_raw_sigma_combines_fit_and_calibration_noise() -> None:
     result = _process_candidate(_config(), _candidate(50.0, fit_rms_px=0.75))
 

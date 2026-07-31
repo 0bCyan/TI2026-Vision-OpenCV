@@ -7,8 +7,8 @@
 ## 当前验证状态
 
 - Python语法检查通过。
-- 111项自动测试通过：圆拟合、反光、JPEG压缩、原始测量sigma、固定暗干扰、标定、跟踪、采集合约、帧新鲜度、生产ROI/坐标/设备路径防误用、采集线程失效、串口恢复、重连年龄、最新结果发布及V2协议黄金帧/CRC/边界。
-- 本机合成ROI重复基准（1280×140，3×300帧）：0漏检，圆心误差RMS约0.55 px、P95约0.59 px；最近一次无并发汇总P50约2.26 ms、P95约3.88 ms、P99约6.63 ms，各轮P95约3.62～4.18 ms。尾延迟会受Windows调度影响，应以目标机多轮结果为准。
+- 128项自动测试通过，覆盖圆拟合、RANSAC平移不变性、反光、JPEG压缩、白管局部对比、预测/全局分割一致性、原始测量sigma、固定暗干扰、标定、跟踪、漏检全局恢复、采集合约、帧新鲜度、生产ROI/坐标/设备路径防误用、采集线程失效、串口恢复、重连年龄、最新结果发布及V2协议黄金帧/CRC/边界。
+- 本机合成流水线基准（ROI 1200×85、半径15.5 px，3×600帧）：0漏检，圆心误差RMS约0.56 px、P95约0.61 px，平均等效约311 FPS；Windows调度下汇总P50约2.32 ms、P95约9.14 ms、P99约13.89 ms。尾延迟未达到严格180 Hz验收线，应以目标机真实相机多轮结果为准。
 - 上述只是算法基准，不包含USB采集和MJPEG解码。
 - 当前未连接目标720p/180fps外置UVC摄像头，因此尚未验证真实180fps、重复帧、曝光和端到端延迟。不能把标称帧率当成实测结果。
 
@@ -38,6 +38,8 @@ MEASURED / PREDICTED / LOST / REACQUIRED + CSV日志
 
 采集、检测和遥测已解耦。采集线程与遥测线程都采用单槽“最新数据优先”，不会在堵塞后补发一串陈旧结果；串口重连会在选择最新结果和计算`FRAME_AGE_US`之前完成，因此重连等待不能伪装成低年龄。像素指纹默认只用于诊断；若目标相机实测证明静止场景仍有稳定的传感器/MJPEG变化，可显式启用`reject_identical_frames`，使相同画面不再推进`FRAME_ID`。更可靠的正式方案仍是原生V4L2/PyGObject采集服务校验sequence/PTS/FID，再设置`freshness_verified_externally: true`。严格模式会拒绝未选择任何新鲜度策略的实时源。
 
+Tracker确认后，检测器仍在完整ROI上生成一次分割掩膜，保证自适应阈值、背景亮度对齐和形态学结果不随搜索路径变化；只把连通域搜索和圆拟合裁到预测点附近的二维窗口，并使用适中的跟踪态RANSAC预算。窗口内一旦没有形成可关联测量，下一帧立即恢复全ROI，并持续全局搜索到重新关联；因此优化不会把错误预测长期固化成局部盲区。
+
 正式控制器必须设置独立通信看门狗：约20～30 ms没有收到CRC正确、序号更新的新包就进入视觉失联安全策略。部分OpenCV原生后端无法保证`read()`可被Python超时中断，因此不能只等待视觉程序主动发送`LOST`。
 
 ## Windows安装
@@ -57,6 +59,16 @@ py -3.12 -m venv .venv
 ```powershell
 ..\.venv\Scripts\python.exe -m pytest -q
 ```
+
+## Action 4白管快速预览
+
+当前DJI Osmo Action 4与白色水管实拍画面使用独立预览配置，避免把Action 4当前UVC模式实测约30 fps、自动曝光和安装位置覆盖到最终180 fps高速相机配置：
+
+```powershell
+.\.venv\Scripts\python.exe run_vision.py --config config\action4_white_pipe.yaml
+```
+
+该配置把ROI收紧到白管所在的`x=40, y=350, 1200×85`区域，并按实拍约`15.5 px`球半径使用“全局暗阈值∩局部均值差∩空管背景差分”分割，避免钢球与左侧阴影或管接头粘连。它关闭串口、UDP和严格摄像头合同，只用于观察识别、处理耗时与采集稳定性；当前毫米映射仅由实拍`0 mm/10 mm`两点建立，未经过全行程独立验证，不能接正式控制器。相机或支架移动后必须重新运行ROI、空管背景和毫米标定流程，不能继续照搬这些像素坐标。
 
 ## 第一次接入摄像头的强制流程
 
@@ -183,10 +195,12 @@ area_max_px: 对应最大面积
 
 ```powershell
 .\.venv\Scripts\python.exe -m pytest -q
-.\.venv\Scripts\python.exe tools\benchmark_synthetic.py --frames 300
+.\.venv\Scripts\python.exe tools\benchmark_synthetic.py --frames 300 --mode search
+.\.venv\Scripts\python.exe tools\benchmark_synthetic.py --frames 300 --mode track --max-p95-ms 5
+.\.venv\Scripts\python.exe tools\benchmark_synthetic.py --frames 300 --mode pipeline
 ```
 
-基准会加入钢球高光、噪声和不同JPEG质量。它用于算法回归，不替代真实摄像头、真实管壁反射和端部遮挡数据。
+`search`测量最坏情况下的全ROI搜索；`track`使用上一帧检测中心验证二维窗口本身；`pipeline`运行真实Kalman关联、首次全局捕获和漏检恢复。`--max-p95-ms`是可选目标机验收门限，不建议把受桌面系统调度影响的单次结果当成最终结论。基准会加入钢球高光、噪声和不同JPEG质量，但不替代真实摄像头、真实管壁反射和端部遮挡数据。
 
 ## 输出状态
 
@@ -248,7 +262,7 @@ git log --oneline --decorate
 git tag --list
 ```
 
-正式V2链路固定标签：
+正式V2链路与优化阶段标签：
 
 ```text
 baseline-pre-v2        优化前完整基线
@@ -256,6 +270,12 @@ vision-v2.0.0-alpha.2  V2原始测量初版
 vision-v2.0.0-alpha.3  帧新鲜度、重连年龄与采集异常修复版
 vision-v2.0.0-alpha.4  生产UART、固定延迟与严格启动合同版
 vision-v2.0.0-alpha.5  当前物理坐标合同与正式配置防误用版
+vision-v2.1.0-alpha.1  二维预测搜索与跟踪态低延迟版
+vision-v2.1.0-alpha.2  Action 4白管ROI与局部对比分割版
+vision-v2.1.0-alpha.3  Action 4空管背景差分版
+vision-v2.1.0-alpha.4  Action 4实测零点版
+vision-v2.1.0-alpha.5  Action 4实测10 mm两点比例版
+vision-v2.1.0-alpha.6  通用预测路径与边缘拟合稳定版
 ```
 
 只查看旧版本而不移动当前分支：
@@ -276,7 +296,7 @@ git switch -c experiment-from-baseline baseline-pre-v2
 ```text
 ball_vision/
   capture.py       最新帧采集与采集统计
-  detector.py      OpenCV候选、圆拟合和边缘精修
+  detector.py      全局/预测二维搜索、OpenCV候选、圆拟合和边缘精修
   circle_fit.py    向量化RANSAC圆拟合
   calibration.py   单调像素—毫米映射
   tracker.py       毫米域Kalman与状态机

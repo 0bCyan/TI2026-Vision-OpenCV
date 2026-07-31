@@ -45,6 +45,42 @@ def test_circle_fit_never_returns_radius_outside_contract() -> None:
         assert fit is None or 10.0 <= fit.radius <= 20.0
 
 
+def test_ransac_fit_is_translation_invariant() -> None:
+    rng = np.random.default_rng(73)
+    center = np.array([82.4, 47.3])
+    radius = 18.5
+    angles = np.linspace(-0.9 * np.pi, 0.8 * np.pi, 96)
+    circle = center + radius * np.column_stack((np.cos(angles), np.sin(angles)))
+    circle += rng.normal(0.0, 0.35, circle.shape)
+    outliers = rng.uniform([55.0, 24.0], [110.0, 70.0], size=(18, 2))
+    points = np.vstack((circle, outliers))
+    shift = np.array([413.0, 127.0])
+
+    fit = fit_circle_ransac(
+        points,
+        radius_min=12.0,
+        radius_max=25.0,
+        iterations=32,
+        residual_threshold=1.2,
+    )
+    shifted_fit = fit_circle_ransac(
+        points + shift,
+        radius_min=12.0,
+        radius_max=25.0,
+        iterations=32,
+        residual_threshold=1.2,
+    )
+
+    assert fit is not None
+    assert shifted_fit is not None
+    assert shifted_fit.center_x - shift[0] == pytest.approx(fit.center_x, abs=1e-9)
+    assert shifted_fit.center_y - shift[1] == pytest.approx(fit.center_y, abs=1e-9)
+    assert shifted_fit.radius == pytest.approx(fit.radius, abs=1e-9)
+    assert shifted_fit.rms == pytest.approx(fit.rms, abs=1e-9)
+    assert shifted_fit.inlier_ratio == fit.inlier_ratio
+    assert shifted_fit.arc_coverage == fit.arc_coverage
+
+
 def test_opposite_short_arcs_do_not_fake_half_circle_coverage() -> None:
     center = np.array([50.0, 40.0])
     radius = 20.0

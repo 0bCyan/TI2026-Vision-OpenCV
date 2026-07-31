@@ -1,36 +1,95 @@
-# 视觉遥测协议 v1
+# Vision telemetry protocol V2
 
-固定长度25字节，小端序。帧由`ball_vision.protocol.encode_telemetry()`生成，CRC采用CRC-16/CCITT-FALSE，多项式`0x1021`、初值`0xFFFF`。
+The vision computer sends a unidirectional fixed-length binary stream to the
+MC02 controller. There is no ACK or command path from MC02 to vision.
 
-| 偏移 | 长度 | 类型 | 内容 |
-|---:|---:|---|---|
-| 0 | 2 | bytes | 帧头`AA 55` |
-| 2 | 1 | uint8 | 协议版本，当前为1 |
-| 3 | 1 | uint8 | 状态flags |
-| 4 | 4 | uint32 | 帧序号 |
-| 8 | 4 | uint32 | `frame_time_us`低32位 |
-| 12 | 2 | int16 | 位置，0.1 mm/LSB |
-| 14 | 2 | int16 | 速度，1 mm/s/LSB |
-| 16 | 1 | uint8 | 置信度，0～255 |
-| 17 | 2 | uint16 | 位置标准差，0.01 mm/LSB |
-| 19 | 2 | uint16 | 当前帧数据年龄，µs |
-| 21 | 2 | uint16 | 视觉处理时间，µs |
-| 23 | 2 | uint16 | CRC16 |
+## Wire format
 
-Flags：
+Every frame is exactly 25 bytes. All multi-byte integers use little-endian
+byte order.
+
+| Offset | Size | Type | Field | Unit / rule |
+|---:|---:|---|---|---|
+| 0 | 2 | bytes | `HEADER` | Always `AA 55` |
+| 2 | 1 | uint8 | `VERSION` | Always `2` |
+| 3 | 1 | uint8 | `FLAGS` | Bits 5..7 must be zero |
+| 4 | 4 | uint32 | `SESSION_ID` | New random value on every process start |
+| 8 | 4 | uint32 | `FRAME_ID` | Camera frame counter; wrap is allowed |
+| 12 | 2 | int16 | `POSITION` | Raw current-frame measurement, 0.1 mm/LSB |
+| 14 | 2 | uint16 | `SIGMA` | Raw measurement standard deviation, 0.01 mm/LSB |
+| 16 | 4 | uint32 | `FRAME_AGE_US` | Exposure estimate to immediately before send |
+| 20 | 2 | uint16 | `PROCESSING_US` | Saturates at 65535 us |
+| 22 | 1 | uint8 | `CONFIDENCE` | 0..255 |
+| 23 | 2 | uint16 | `CRC16` | Little-endian CRC value |
+
+`POSITION`, `SIGMA`, and `CONFIDENCE` describe only a real measurement from
+the current image. A tracker prediction must never be placed in these fields.
+When `MEASUREMENT_VALID` is clear, the encoder writes all three fields as zero
+and MC02 ignores them.
+
+## Flags
 
 ```text
-bit0 VALID
+bit0 MEASUREMENT_VALID
 bit1 PREDICTED
 bit2 LOST
 bit3 REACQUIRED
 bit4 NEAR_EDGE
+bit5..7 reserved, always zero
 ```
 
-控制器只能把`VALID`视为本帧真实测量。`PREDICTED`可用于短时平滑或监控，但不能重置视觉失联计时器。
+The legal state combinations are:
 
-MCU必须实现独立通信看门狗，不能依赖Python进程主动发送`LOST`：连续约20～30 ms没有收到CRC正确且序号更新的新包，就按视觉失联处理并进入安全策略。OpenCV的部分原生后端可能阻塞在`read()`中，此时应用层无法生成新的LOST包；通信看门狗是硬性安全边界。
+- `NONE`, `PREDICTED`, or `LOST` when there is no current measurement.
+- `MEASUREMENT_VALID`, optionally with `REACQUIRED` and/or `NEAR_EDGE`, when
+  the packet carries a current-frame measurement.
 
-`frame_time_us`和MCU不一定共用时钟，主要用于视觉帧间`dt`和回绕安全序号；MCU侧实时补偿优先使用`frame_age_us`与离线LED实验得到的固定延迟。
+`MEASUREMENT_VALID` is mutually exclusive with `PREDICTED` and `LOST`.
+`PREDICTED` is mutually exclusive with `LOST`. `REACQUIRED` and `NEAR_EDGE`
+both require `MEASUREMENT_VALID`. Initial acquisition is not `REACQUIRED`.
 
-建议串口波特率921600。每帧25字节、180 Hz时净载荷约4.5 kB/s，带宽余量充足。
+## CRC
+
+The checksum is CRC-16/CCITT-FALSE:
+
+```text
+width   = 16
+poly    = 0x1021
+init    = 0xFFFF
+refin   = false
+refout  = false
+xorout  = 0x0000
+check("123456789") = 0x29B1
+```
+
+CRC covers bytes 2 through 22 inclusive (`VERSION` through `CONFIDENCE`). It
+does not cover the two-byte header or the CRC field itself. The result is
+placed at offsets 23..24 in little-endian order.
+
+## Golden frame
+
+Both Python and MC02 tests must decode this hard-coded frame and reproduce it
+from the listed values. A test must not generate its own expected bytes with
+the implementation under test.
+
+```text
+AA 55 02 01 44 33 22 11 D4 C3 B2 A1 85 FF FA 00
+39 30 00 00 29 09 C8 EE 09
+```
+
+```text
+VERSION       = 2
+FLAGS         = MEASUREMENT_VALID
+SESSION_ID    = 0x11223344
+FRAME_ID      = 0xA1B2C3D4
+POSITION      = -123  (-12.3 mm)
+SIGMA         = 250   (2.50 mm)
+FRAME_AGE_US  = 12345
+PROCESSING_US = 2345
+CONFIDENCE    = 200
+CRC16         = 0x09EE
+```
+
+At 921600 baud, 8N1, one frame occupies 250 serial bits, approximately
+271.3 us. This wire time is not included in `FRAME_AGE_US`; MC02 accounts for
+it when reconstructing the capture time from the final-byte receive time.

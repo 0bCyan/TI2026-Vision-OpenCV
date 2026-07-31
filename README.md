@@ -235,12 +235,13 @@ git log --oneline --decorate
 git tag --list
 ```
 
-两个固定标签：
+正式V2链路固定标签：
 
 ```text
 baseline-pre-v2        优化前完整基线
 vision-v2.0.0-alpha.2  V2原始测量初版
 vision-v2.0.0-alpha.3  帧新鲜度、重连年龄与采集异常修复版
+vision-v2.0.0-alpha.4  当前生产UART、固定延迟与严格启动合同版
 ```
 
 只查看旧版本而不移动当前分支：

@@ -7,7 +7,7 @@
 ## 当前验证状态
 
 - Python语法检查通过。
-- 79项自动测试通过：圆拟合、反光、JPEG压缩、原始测量sigma、固定暗干扰、标定、跟踪、采集合约、最新结果发布及V2协议黄金帧/CRC/边界。
+- 80项自动测试通过：圆拟合、反光、JPEG压缩、原始测量sigma、固定暗干扰、标定、跟踪、采集合约、串口恢复、最新结果发布及V2协议黄金帧/CRC/边界。
 - 本机合成ROI重复基准（1280×140，3×300帧）：0漏检，圆心误差RMS约0.55 px、P95约0.59 px；最近一次无并发汇总P50约2.26 ms、P95约3.88 ms、P99约6.63 ms，各轮P95约3.62～4.18 ms。尾延迟会受Windows调度影响，应以目标机多轮结果为准。
 - 上述只是算法基准，不包含USB采集和MJPEG解码。
 - 当前未连接目标720p/180fps外置UVC摄像头，因此尚未验证真实180fps、重复帧、曝光和端到端延迟。不能把标称帧率当成实测结果。
@@ -219,6 +219,35 @@ OpenCV摄像头到达时间只是“解码完成到达应用”的时刻，不�
 ## 香橙派5 Ultra迁移
 
 算法层、配置、协议和测试不变，只替换采集后端。详细步骤见[ORANGE_PI.md](ORANGE_PI.md)。
+
+## Git回退点
+
+本目录是独立Git仓库。查看阶段历史：
+
+```powershell
+git log --oneline --decorate
+git tag --list
+```
+
+两个固定标签：
+
+```text
+baseline-pre-v2        优化前完整基线
+vision-v2.0.0-alpha.2  当前V2原始测量与可靠发送版本
+```
+
+只查看旧版本而不移动当前分支：
+
+```powershell
+git switch --detach baseline-pre-v2
+git switch main
+```
+
+需要在旧版本上继续开发时，从标签新建分支：
+
+```powershell
+git switch -c experiment-from-baseline baseline-pre-v2
+```
 
 ## 目录
 

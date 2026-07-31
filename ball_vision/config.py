@@ -72,6 +72,9 @@ class ThresholdConfig:
     std_gain: float = 0.8
     threshold_min: int = 25
     threshold_max: int = 180
+    local_contrast_enabled: bool = False
+    local_contrast_kernel_size: int = 41
+    local_contrast_threshold: int = 20
     background_enabled: bool = True
     background_path: str = "data/background.png"
     background_diff_threshold: int = 18
@@ -311,6 +314,10 @@ class AppConfig:
         threshold = self.detector.threshold
         if not 0 <= threshold.threshold_min < threshold.threshold_max <= 255:
             raise ValueError("灰度阈值上下限必须满足 0 <= min < max <= 255")
+        if threshold.local_contrast_kernel_size < 3:
+            raise ValueError("local_contrast_kernel_size 必须至少为3")
+        if not 1 <= threshold.local_contrast_threshold <= 255:
+            raise ValueError("local_contrast_threshold 必须在[1, 255]内")
         if not 1 <= threshold.background_diff_threshold <= 255:
             raise ValueError("background_diff_threshold 必须在[1, 255]内")
         if min(

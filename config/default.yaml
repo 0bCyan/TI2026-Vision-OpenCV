@@ -57,6 +57,10 @@ detector:
     std_gain: 0.8
     threshold_min: 25
     threshold_max: 180
+    # 局部对比门控默认关闭；白管明暗不均的Action 4预览档会单独启用。
+    local_contrast_enabled: false
+    local_contrast_kernel_size: 41
+    local_contrast_threshold: 20
     background_enabled: true
     background_path: data/background.png
     background_diff_threshold: 18

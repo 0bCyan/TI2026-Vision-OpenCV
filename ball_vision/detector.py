@@ -94,6 +94,30 @@ class BallDetector:
             threshold = float(np.clip(median + contrast, threshold_config.threshold_min, threshold_config.threshold_max))
             intensity_mask = cv2.inRange(filtered, round(threshold), 255)
 
+        if threshold_config.local_contrast_enabled:
+            local_kernel_size = _odd_kernel(
+                threshold_config.local_contrast_kernel_size
+            )
+            local_background = cv2.boxFilter(
+                filtered,
+                -1,
+                (local_kernel_size, local_kernel_size),
+                normalize=True,
+                borderType=cv2.BORDER_REPLICATE,
+            )
+            if threshold_config.polarity == "dark":
+                local_difference = cv2.subtract(local_background, filtered)
+            else:
+                local_difference = cv2.subtract(filtered, local_background)
+            local_mask = cv2.inRange(
+                local_difference,
+                int(threshold_config.local_contrast_threshold),
+                255,
+            )
+            # Global intensity keeps the target physically dark/bright, while
+            # local contrast separates it from broad pipe shadows and seams.
+            intensity_mask = cv2.bitwise_and(intensity_mask, local_mask)
+
         background_mask = np.zeros_like(intensity_mask)
         background = (
             self.background if background_override is None else background_override

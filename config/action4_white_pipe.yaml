@@ -1,0 +1,91 @@
+# DJI Osmo Action 4 + 当前白色水管的桌面预览配置（2026-07-31）。
+# 这是独立的非严格测试档：不启用串口/UDP，毫米标定仍是占位值，不能用于正式控制。
+# 最终720p/180fps高速相机仍使用default.yaml，并在固定安装后重新选择ROI、背景和标定点。
+camera:
+  source: 1
+  backend: dshow
+  width: 1280
+  height: 720
+  fps: 30.0
+  fourcc: MJPG
+  buffer_size: 1
+  reconnect_seconds: 1.0
+  read_timeout_seconds: 0.05
+  warmup_seconds: 0.5
+  strict_contract: false
+  min_measured_fps_ratio: 0.80
+  max_interval_p99_ms: 40.0
+  max_frame_gap_ms: 80.0
+  max_read_p95_ms: 30.0
+  max_read_failures: 3
+  # Action 4不复用高速工业相机的DirectShow曝光档位。
+  controls: {}
+  strict_control_readback: false
+  controls_verified_externally: false
+  fingerprint_frames: false
+  reject_identical_frames: false
+  freshness_verified_externally: false
+
+# 实拍白管只占约85行。收紧ROI可防止黑色底盘主导自适应阈值。
+roi:
+  x: 40
+  y: 350
+  width: 1200
+  height: 85
+
+detector:
+  threshold:
+    polarity: dark
+    median_blur_size: 5
+    min_contrast_delta: 16.0
+    std_gain: 0.35
+    threshold_min: 45
+    threshold_max: 190
+    # 全局暗阈值再与41 px局部均值差相交，切断钢球与左侧阴影/接头的粘连。
+    local_contrast_enabled: true
+    local_contrast_kernel_size: 41
+    local_contrast_threshold: 12
+    # 当前画面带球，不能把它采成空管背景；预览先使用白管内的暗球强度分割。
+    background_enabled: false
+    background_path: data/action4_white_pipe_background.png
+    background_diff_threshold: 18
+    background_brightness_align: true
+    combine_mode: intensity
+    morph_open_size: 3
+    morph_close_size: 7
+  radius_min_px: 10.0
+  radius_max_px: 22.0
+  expected_radius_px: 15.5
+  radius_tolerance_search_ratio: 0.40
+  radius_tolerance_track_ratio: 0.30
+  area_min_px: 220.0
+  area_max_px: 1800.0
+  circularity_min: 0.40
+  fill_ratio_min: 0.42
+  aspect_ratio_min: 0.55
+  aspect_ratio_max: 1.75
+  channel_center_y_px: 41.0
+  max_center_y_error_px: 28.0
+  predictive_search_enabled: true
+  predictive_search_y_half_height_px: 28.0
+
+output:
+  serial_enabled: false
+  udp_enabled: false
+
+display:
+  enabled: true
+  max_fps: 30.0
+  scale: 0.65
+  show_mask: true
+  draw_candidates: true
+
+logging:
+  enabled: true
+  directory: logs
+  flush_interval_seconds: 1.0
+
+runtime:
+  opencv_threads: 1
+  opencl_enabled: false
+  disable_python_gc: true

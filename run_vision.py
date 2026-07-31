@@ -28,6 +28,14 @@ def parse_args() -> argparse.Namespace:
         help="measured camera exposure-to-OpenCV fixed latency compensation",
     )
     parser.add_argument(
+        "--bench-serial",
+        action="store_true",
+        help=(
+            "allow serial protocol bring-up with an unverified preview config; "
+            "MC02 actuators must remain disabled"
+        ),
+    )
+    parser.add_argument(
         "--production",
         action="store_true",
         help="require serial output, strict camera checks and calibrated timestamp offset",
@@ -51,6 +59,13 @@ def main() -> None:
         config.output.serial_port = args.serial_port
     if args.timestamp_offset_ms is not None:
         config.camera.timestamp_offset_ms = args.timestamp_offset_ms
+    if args.bench_serial:
+        if args.serial_port is None:
+            raise SystemExit("[FATAL] --bench-serial requires --serial-port")
+        if args.production or args.strict:
+            raise SystemExit(
+                "[FATAL] --bench-serial cannot be combined with --strict/--production"
+            )
     if args.production:
         config.display.enabled = False
         config.camera.strict_contract = True
@@ -62,7 +77,7 @@ def main() -> None:
             )
     config.validate()
     try:
-        VisionApplication(config).run()
+        VisionApplication(config, bench_serial=args.bench_serial).run()
     except (OSError, RuntimeError, ValueError) as error:
         raise SystemExit(f"[FATAL] {error}") from None
 

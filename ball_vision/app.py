@@ -24,17 +24,32 @@ from .visualization import DebugDisplay
 class VisionApplication:
     _MC02_POSITION_LIMIT_MM = 125.0
 
-    def __init__(self, config: AppConfig) -> None:
+    def __init__(
+        self,
+        config: AppConfig,
+        *,
+        bench_serial: bool = False,
+    ) -> None:
         self.config = config
-        if config.output.serial_enabled or config.output.udp_enabled:
+        if bench_serial and not config.output.serial_enabled:
+            raise ValueError("bench_serial要求启用串口输出")
+        verified_output_required = (
+            config.output.udp_enabled
+            or (config.output.serial_enabled and not bench_serial)
+        )
+        if verified_output_required:
             config.camera.strict_contract = True
         self._production_output = (
             config.camera.strict_contract
-            or config.output.serial_enabled
-            or config.output.udp_enabled
+            or verified_output_required
         )
         if self._production_output:
             self._verify_vision_setup()
+        elif bench_serial:
+            print(
+                "[WARN] BENCH SERIAL已启用：正在发送未通过正式合同的测量，"
+                "仅限MC02电机禁能联调，禁止闭环控制"
+            )
         cv2.setNumThreads(max(1, config.runtime.opencv_threads))
         if hasattr(cv2, "ocl"):
             cv2.ocl.setUseOpenCL(config.runtime.opencl_enabled)

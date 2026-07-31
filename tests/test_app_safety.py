@@ -144,3 +144,25 @@ def test_runtime_measured_rate_tracks_raw_protocol_measurements() -> None:
     application._record_runtime_stats(result, skipped=0)
 
     assert application.stats.summary().measured_rate == 0.0
+
+
+def test_bench_serial_is_explicit_and_does_not_claim_production_setup() -> None:
+    config = AppConfig()
+    config.output.serial_enabled = True
+    config.output.serial_port = "/dev/null"
+    config.detector.threshold.background_enabled = False
+    config.display.enabled = False
+    config.logging.enabled = False
+
+    application = VisionApplication(config, bench_serial=True)
+    try:
+        assert not config.camera.strict_contract
+        assert not application._production_output
+    finally:
+        application.close()
+
+
+def test_bench_serial_requires_serial_output() -> None:
+    config = AppConfig()
+    with pytest.raises(ValueError, match="启用串口输出"):
+        VisionApplication(config, bench_serial=True)

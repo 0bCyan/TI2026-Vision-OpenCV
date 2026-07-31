@@ -132,3 +132,12 @@ export VISION_CAMERA_SOURCE=/dev/v4l/by-id/你的摄像头
 启动器强制使用921600 8N1、无流控、单向发送，并启用摄像头严格合同。它会拒绝
 `config/default.yaml`、数字相机索引、`/dev/videoN`临时编号和不存在的设备；配置、
 设备或时间补偿未填写时会直接退出，避免静默带着占位参数向MC02发送数据。
+
+只做MC02收包联调、且确保电机禁能时，可显式使用`--bench-serial`配合预览配置。
+该开关不会把预览配置伪装成正式配置，也不能与`--strict`或`--production`同时使用：
+
+```bash
+python run_vision.py --config config/action4_white_pipe.yaml \
+  --source /dev/v4l/by-id/你的摄像头 --backend v4l2 \
+  --serial-port /dev/ttyS6 --bench-serial
+```

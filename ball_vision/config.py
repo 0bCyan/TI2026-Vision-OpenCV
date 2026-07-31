@@ -245,6 +245,11 @@ class AppConfig:
     def validate(self) -> None:
         if self.camera.width <= 0 or self.camera.height <= 0 or self.camera.fps <= 0:
             raise ValueError("摄像头分辨率和帧率必须大于0")
+        if (
+            not math.isfinite(self.camera.timestamp_offset_ms)
+            or self.camera.timestamp_offset_ms < 0
+        ):
+            raise ValueError("camera.timestamp_offset_ms必须是非负有限数")
         if self.camera.buffer_size < 1:
             raise ValueError("camera.buffer_size 必须至少为1")
         if self.camera.read_timeout_seconds <= 0 or self.camera.reconnect_seconds <= 0:
@@ -425,12 +430,14 @@ class AppConfig:
             raise ValueError("必须满足 0 < max_prediction_ms < lost_reset_ms")
         if self.output.udp_port <= 0 or self.output.udp_port > 65535:
             raise ValueError("UDP端口必须在[1, 65535]内")
-        if self.output.serial_baudrate <= 0:
-            raise ValueError("串口波特率必须大于0")
+        if self.output.serial_baudrate != 921600:
+            raise ValueError("MC02视觉串口固定使用921600 baud")
+        if self.output.serial_enabled and not self.output.serial_port.strip():
+            raise ValueError("启用串口输出时output.serial_port不能为空")
         if self.output.serial_reconnect_seconds <= 0:
             raise ValueError("output.serial_reconnect_seconds必须大于0")
-        if not 1_000 <= self.output.max_frame_age_us <= 1_000_000:
-            raise ValueError("output.max_frame_age_us 必须在[1000, 1000000]内")
+        if not 1_000 <= self.output.max_frame_age_us <= 80_000:
+            raise ValueError("output.max_frame_age_us 必须在[1000, 80000]内")
         if self.display.max_fps <= 0 or self.display.scale <= 0:
             raise ValueError("显示帧率和缩放必须大于0")
         if self.logging.flush_interval_seconds <= 0:

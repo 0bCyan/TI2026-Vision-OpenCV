@@ -127,6 +127,7 @@ tracker:
   velocity_limit_mm_s: 1800.0
 
 output:
+  # 开发机默认不占用串口。香橙派正式启动必须通过--serial-port显式指定真实设备。
   serial_enabled: false
   serial_port: COM3
   serial_baudrate: 921600

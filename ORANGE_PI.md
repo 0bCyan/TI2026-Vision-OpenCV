@@ -90,3 +90,27 @@ print(cv2.getBuildInformation())
 软件计时只能得到“解码后处理时间”。最终用MCU驱动视野内LED翻转，同时记录视觉首次检测到变化的时刻，用逻辑分析仪测曝光到结果的P50/P95/P99。完成后把固定流水线延迟写入`camera.timestamp_offset_ms`，并重新验证控制稳定性。
 
 OpenCV/V4L2/GStreamer经`cv2.VideoCapture`时不保证阻塞的`read()`能被Python超时中断。正式比赛至少保证MCU在20～30 ms没有收到新序号遥测时进入安全状态；若目标镜像上复现原生读取永久卡死，再把采集后端改成可由监护进程强制重启的原生V4L2/PyGObject服务。
+
+## 6. MC02串口
+
+视觉链路是单向3.3 V TTL：香橙派UART TX连接MC02 `PA10/USART1_RX`，双方GND
+相连。MC02 `PA9`不接，VCC/5V/3V3不接。不要使用带5 V电平的RS-232接口。
+
+香橙派的UART设备编号取决于具体型号、设备树和是否占用系统控制台，仓库不猜测
+`/dev/ttySx`编号。先关闭对应UART的Linux控制台并确认实际设备：
+
+```bash
+ls -l /dev/serial/by-id 2>/dev/null || true
+ls -l /dev/ttyS* /dev/ttyUSB* /dev/ttyAMA* 2>/dev/null || true
+```
+
+正式启动必须显式提供UART设备和LED实测得到的固定延迟：
+
+```bash
+export MC02_VISION_UART=/dev/ttyS4             # 替换为实机设备
+export VISION_TIMESTAMP_OFFSET_MS=6.3          # 替换为LED实测值
+./tools/run_orange_pi.sh
+```
+
+启动器强制使用921600 8N1、无流控、单向发送，并启用摄像头严格合同；设备缺失、
+波特率错误或时间补偿未填写时会直接退出，避免静默运行却没有向MC02发送数据。

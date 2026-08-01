@@ -105,6 +105,17 @@ output:
   serial_enabled: false
   udp_enabled: false
 
+# 网页/录像服务全程常驻；独立低优先级线程限速发布，不阻塞识别与串口。
+frame_stream:
+  enabled: true
+  socket_path: ${XDG_RUNTIME_DIR}/video-link-frames.sock
+  max_fps: 10.0
+  max_width: 640
+  jpeg_quality: 70
+  max_frame_bytes: 2097152
+  connect_retry_seconds: 1.0
+  send_timeout_seconds: 0.25
+
 display:
   enabled: true
   max_fps: 30.0

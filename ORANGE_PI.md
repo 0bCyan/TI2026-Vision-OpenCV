@@ -95,7 +95,7 @@ print(cv2.getBuildInformation())
 - 不使用`videorate`，否则可能复制帧伪造180fps。
 - 解码前队列必须`max-size-buffers=1 leaky=downstream`。
 - appsink必须`max-buffers=1 drop=true sync=false`。
-- 显示、无线图传和录像限制在20～30fps，不能放入采集或检测线程。
+- 显示、无线图传和录像使用独立单槽线程；当前网页预览限制为640×360、10fps、JPEG质量70，不能放入采集或检测线程。
 - 比较`runtime.opencv_threads=1/2/4`的P50/P95/P99，选尾延迟最小的配置。
 - 分别运行合成基准的`--mode search`、`--mode track`和`--mode pipeline`；正式控制主要看pipeline多轮P95/P99，不能只引用局部窗口的最好一次结果。
 - 正式运行建议关闭Python循环GC，程序退出时恢复并回收。
@@ -129,6 +129,17 @@ export VISION_CAMERA_SOURCE=/dev/v4l/by-id/你的摄像头
 ./tools/run_orange_pi.sh
 ```
 
+正式配置保留以下段即可自动连接常驻网页服务；网页服务重启时视觉不会重启或释放相机：
+
+```yaml
+frame_stream:
+  enabled: true
+  socket_path: ${XDG_RUNTIME_DIR}/video-link-frames.sock
+  max_fps: 10.0
+  max_width: 640
+  jpeg_quality: 70
+```
+
 启动器强制使用921600 8N1、无流控、单向发送，并启用摄像头严格合同。它会拒绝
 `config/default.yaml`、数字相机索引、`/dev/videoN`临时编号和不存在的设备；配置、
 设备或时间补偿未填写时会直接退出，避免静默带着占位参数向MC02发送数据。
@@ -141,3 +152,19 @@ python run_vision.py --config config/action4_white_pipe.yaml \
   --source /dev/v4l/by-id/你的摄像头 --backend v4l2 \
   --serial-port /dev/ttyS6 --bench-serial
 ```
+
+## 7. 开机监护与无摄像头重试
+
+`tools/run_camera_monitor.sh`只选择USB V4L2采集设备，会忽略香橙派自带的HDMI输入。无摄像头时它默认每5秒扫描一次；找到后才启动视觉程序。摄像头断开时，视觉采集线程按`camera.reconnect_seconds`重试，网页服务始终保持运行。
+
+将仓库中的用户单元注册到管理员账号：
+
+```bash
+mkdir -p ~/.config/systemd/user ~/.config/ti-vision
+cp packaging/systemd/ti-vision-camera.service ~/.config/systemd/user/
+systemctl --user daemon-reload
+systemctl --user enable --now ti-vision-camera.service
+sudo loginctl enable-linger "$USER"
+```
+
+扫描间隔、Python、配置和固定摄像头路径可在`~/.config/ti-vision/camera.env`中设置`VISION_RETRY_SECONDS`、`VISION_PYTHON`、`VISION_CONFIG`和`VISION_CAMERA_SOURCE`。没有固定`VISION_CAMERA_SOURCE`时，优先选择`/dev/v4l/by-id/*-video-index0`。

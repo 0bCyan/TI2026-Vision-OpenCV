@@ -1,0 +1,22 @@
+[Unit]
+Description=TI2026 vision camera monitor and frame publisher
+After=video-link-sender.service
+Wants=video-link-sender.service
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+WorkingDirectory=%h/桌面/TI2026-Vision-OpenCV
+Environment=PYTHONUNBUFFERED=1
+EnvironmentFile=-%h/.config/ti-vision/camera.env
+ExecStart=/bin/sh %h/桌面/TI2026-Vision-OpenCV/tools/run_camera_monitor.sh
+Restart=always
+RestartSec=2
+TimeoutStopSec=5
+KillMode=mixed
+NoNewPrivileges=true
+PrivateTmp=true
+LimitSTACK=8M
+
+[Install]
+WantedBy=default.target

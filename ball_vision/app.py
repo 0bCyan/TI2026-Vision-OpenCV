@@ -13,6 +13,7 @@ from .config import (
     AppConfig,
 )
 from .output import LatestTelemetryPublisher, create_publisher
+from .frame_output import LatestMjpegPublisher
 from .pipeline import PipelineResult, VisionPipeline
 from .protocol import VisionFlags, encode_telemetry
 from .runtime_stats import RuntimeStats
@@ -64,6 +65,7 @@ class VisionApplication:
         ):
             raise RuntimeError("空管背景文件无法读取，已拒绝启用正式遥测输出")
         self.capture = LatestFrameCapture(config.camera)
+        self.frame_publisher = LatestMjpegPublisher(config.frame_stream)
         self.publisher = LatestTelemetryPublisher(create_publisher(config.output))
         self.session_id = secrets.randbits(32)
         self.logger = CsvTelemetryLogger(config.logging, config.base_directory)
@@ -178,6 +180,7 @@ class VisionApplication:
                 time.sleep(2.0)
                 self.capture.verify_contract()
             next_contract_check = time.monotonic() + 1.0
+            next_timeout_warning = 0.0
 
             while True:
                 packet = self.capture.latest(
@@ -188,10 +191,14 @@ class VisionApplication:
                     if not self.capture.is_live_source and not self.capture.running:
                         print("录像回放结束")
                         break
-                    print("[WARN] 等待新帧超时，控制端应依据frame age进入LOST")
+                    now = time.monotonic()
+                    if now >= next_timeout_warning:
+                        print("[WARN] 等待新帧超时，控制端应依据frame age进入LOST")
+                        next_timeout_warning = now + 5.0
                     continue
                 skipped = 0 if last_sequence < 0 else max(0, packet.sequence - last_sequence - 1)
                 last_sequence = packet.sequence
+                self.frame_publisher.submit(packet.image, packet.frame_time_ns)
                 result = self.pipeline.process(packet)
                 self._submit_telemetry(result)
                 if (
@@ -268,6 +275,7 @@ class VisionApplication:
 
     def close(self) -> None:
         self.capture.stop()
+        self.frame_publisher.close()
         self.publisher.close()
         self.logger.close()
         self.display.close()
@@ -277,6 +285,7 @@ class VisionApplication:
         capture_stats = self.capture.stats()
         processing = self.stats.summary()
         publisher_stats = self.publisher.stats()
+        frame_publisher_stats = self.frame_publisher.stats()
         print("\n=== Runtime summary ===")
         print(f"capture fps       : {capture_stats.measured_fps:.2f}")
         print(
@@ -297,6 +306,12 @@ class VisionApplication:
             "telemetry submit/sent/drop/error: "
             f"{publisher_stats.submitted}/{publisher_stats.sent}/"
             f"{publisher_stats.superseded}/{publisher_stats.errors}"
+        )
+        print(
+            "web frames submit/sent/drop/error: "
+            f"{frame_publisher_stats.submitted}/{frame_publisher_stats.sent}/"
+            f"{frame_publisher_stats.superseded}/"
+            f"{frame_publisher_stats.encode_errors + frame_publisher_stats.transport_errors}"
         )
         if self.logger.path:
             print(f"CSV log           : {self.logger.path}")

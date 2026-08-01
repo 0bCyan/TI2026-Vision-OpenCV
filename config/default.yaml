@@ -175,6 +175,18 @@ output:
   # 超过该年龄的检测结果不再排队发送，MC02仍需独立判断总测量年龄。
   max_frame_age_us: 80000
 
+# 比赛网页服务全程常驻，但录像由网页按钮按需开始/停止。供帧线程只有一个
+# 可覆盖的最新帧槽，网页断开或编码变慢时不会阻塞采集、识别和串口。
+frame_stream:
+  enabled: true
+  socket_path: ${XDG_RUNTIME_DIR}/video-link-frames.sock
+  max_fps: 10.0
+  max_width: 640
+  jpeg_quality: 70
+  max_frame_bytes: 2097152
+  connect_retry_seconds: 1.0
+  send_timeout_seconds: 0.25
+
 display:
   enabled: true
   max_fps: 30.0

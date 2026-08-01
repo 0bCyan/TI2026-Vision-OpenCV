@@ -191,6 +191,18 @@ class OutputConfig:
 
 
 @dataclass(slots=True)
+class FrameStreamConfig:
+    enabled: bool = False
+    socket_path: str = "${XDG_RUNTIME_DIR}/video-link-frames.sock"
+    max_fps: float = 10.0
+    max_width: int = 640
+    jpeg_quality: int = 70
+    max_frame_bytes: int = 2 * 1024 * 1024
+    connect_retry_seconds: float = 1.0
+    send_timeout_seconds: float = 0.25
+
+
+@dataclass(slots=True)
 class DisplayConfig:
     enabled: bool = True
     max_fps: float = 30.0
@@ -222,6 +234,7 @@ class AppConfig:
     measurement: MeasurementConfig = field(default_factory=MeasurementConfig)
     tracker: TrackerConfig = field(default_factory=TrackerConfig)
     output: OutputConfig = field(default_factory=OutputConfig)
+    frame_stream: FrameStreamConfig = field(default_factory=FrameStreamConfig)
     display: DisplayConfig = field(default_factory=DisplayConfig)
     logging: LoggingConfig = field(default_factory=LoggingConfig)
     runtime: RuntimeConfig = field(default_factory=RuntimeConfig)
@@ -242,6 +255,7 @@ class AppConfig:
             measurement=MeasurementConfig(**_section(raw, "measurement")),
             tracker=TrackerConfig(**_section(raw, "tracker")),
             output=OutputConfig(**_section(raw, "output")),
+            frame_stream=FrameStreamConfig(**_section(raw, "frame_stream")),
             display=DisplayConfig(**_section(raw, "display")),
             logging=LoggingConfig(**_section(raw, "logging")),
             runtime=RuntimeConfig(**_section(raw, "runtime")),
@@ -509,6 +523,21 @@ class AppConfig:
             raise ValueError("output.serial_reconnect_seconds必须大于0")
         if not 1_000 <= self.output.max_frame_age_us <= 80_000:
             raise ValueError("output.max_frame_age_us 必须在[1000, 80000]内")
+        if self.frame_stream.enabled and not self.frame_stream.socket_path.strip():
+            raise ValueError("frame_stream.socket_path不能为空")
+        if not 0 < self.frame_stream.max_fps <= 30:
+            raise ValueError("frame_stream.max_fps必须在(0, 30]内")
+        if not 160 <= self.frame_stream.max_width <= 3840:
+            raise ValueError("frame_stream.max_width必须在[160, 3840]内")
+        if not 1 <= self.frame_stream.jpeg_quality <= 100:
+            raise ValueError("frame_stream.jpeg_quality必须在[1, 100]内")
+        if not 4096 <= self.frame_stream.max_frame_bytes <= 16 * 1024 * 1024:
+            raise ValueError("frame_stream.max_frame_bytes必须在[4096, 16777216]内")
+        if (
+            self.frame_stream.connect_retry_seconds <= 0
+            or self.frame_stream.send_timeout_seconds <= 0
+        ):
+            raise ValueError("frame_stream重连和发送超时必须大于0")
         if self.display.max_fps <= 0 or self.display.scale <= 0:
             raise ValueError("显示帧率和缩放必须大于0")
         if self.logging.flush_interval_seconds <= 0:
